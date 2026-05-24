@@ -142,6 +142,16 @@ class BinaryOp(ASTNode):
     def __str__(self):
         return f"[{self.op}, {self.lhs}, {self.rhs}]"
 
+class Return(ASTNode):
+    def __init__(self, expression: ASTNode) -> None:
+        self.expression = expression
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_return(self)
+
+    def __str__(self):
+        return f"[RETURN, {self.expression}]"
+
 #%%
 """
 ================================================================ 
@@ -184,13 +194,20 @@ class Visitor(ABC):
     def visit_assignment(self, node: Assignment) -> None:
         pass
 
+    @abstractmethod
+    def visit_return(self, node: Return) -> None:
+        pass
+
 class IRGenerator(Visitor):
-    def __init__(self, builder, intType, doubleType):
+    def __init__(self, builder, intType, doubleType, stringType, boolType):
         self.stack = []
         self.symbol_table = {}
         self.builder = builder
         self.intType = intType
         self.doubleType = doubleType
+        self.stringType = stringType
+        self.boolType = ir.IntType(1)
+        self.return_value = None
 
     def visit_literal(self, node: Literal) -> None:
         if node.type == "INT":
@@ -200,6 +217,14 @@ class IRGenerator(Visitor):
         elif node.type == "DOUBLE":
             value = ir.Constant(self.doubleType, node.value)
             self.stack.append((value, "double"))
+        
+        elif node.type == "STRING":
+            value = ir.Constant(self.stringType, node.value)
+            self.stack.append((value, "string"))
+
+        elif node.type == "BOOL":
+            value = ir.Constant(self.boolType, node.value)
+            self.stack.append((value, "bool"))
 
     def visit_program(self, node: Program) -> None:
         node.decls.accept(self)
@@ -216,6 +241,12 @@ class IRGenerator(Visitor):
         elif node.var_type == "double":
             llvm_type = self.doubleType
             var_type = "double"
+        elif node.var_type == "string" or node.var_type == "str":
+            llvm_type = self.stringType
+            var_type = "string"
+        elif node.var_type == "bool":
+            llvm_type = self.boolType
+            var_type = "bool"
         else:
             raise ValueError(f"Tipo desconocido: {node.var_type}")
 
@@ -231,6 +262,9 @@ class IRGenerator(Visitor):
         for statement in node.statements:
             statement.accept(self)
 
+            if self.return_value is not None:
+                break
+
     def visit_assignment(self, node: Assignment) -> None:
         node.expression.accept(self)
 
@@ -245,12 +279,12 @@ class IRGenerator(Visitor):
         elif var_type == "int" and value_type == "double":
             raise TypeError("No se puede asignar 'DOUBLE' a 'INT' sin conversión explícita")
 
+        elif var_type != value_type:
+            raise TypeError(f"No se puede asignar '{value_type}' a '{var_type}'")
+
         self.builder.store(value, ptr)
 
         self.stack.append((value, var_type))
-
-    def visit_variable(self, node: Variable) -> None:
-        pass
 
     def visit_binary_op(self, node: BinaryOp) -> None:
         node.lhs.accept(self)
@@ -258,6 +292,12 @@ class IRGenerator(Visitor):
 
         rhs, rhs_type = self.stack.pop()
         lhs, lhs_type = self.stack.pop()
+
+        if lhs_type == "string" or rhs_type == "string":
+            raise TypeError(f"No se puede usar el operador {node.op} con strings")
+
+        if lhs_type == "bool" or rhs_type == "bool":
+            raise TypeError(f"No se puede usar el operador {node.op} con strings")
 
         if lhs_type == "double" or rhs_type == "double":
             if lhs_type == "int":
@@ -294,4 +334,10 @@ class IRGenerator(Visitor):
                 raise ValueError(f"Operador desconocido: {node.op}")
 
             self.stack.append((result, "int"))
+        
+    def visit_return(self, node: Return) -> None:
+        node.expression.accept(self)
+
+        value, value_type = self.stack.pop()
+        self.return_value = (value, value_type)
 # %%

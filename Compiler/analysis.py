@@ -21,10 +21,15 @@ from llvmlite import ir
 
 reserved = {
     'int': 'INT',
-    'double': 'DOUBLE'
+    'double': 'DOUBLE',
+    'string': 'STRING',
+    'bool': 'BOOL',
+    'true': 'TRUE',
+    'false': 'FALSE',
+    'return': 'RETURN'
 }
 
-tokens = ['ID', 'INTLIT', 'DOUBLELIT'] + list(reserved.values())
+tokens = ['ID', 'INTLIT', 'DOUBLELIT', 'STRINGLIT'] + list(reserved.values())
 t_ignore = ' \t'
 
 literals = '+-*/%(){},;='
@@ -50,6 +55,15 @@ def t_DOUBLELIT(t):
     t.value = float(t.value)
     return t
 
+#Reconocimiento de strings
+"""
+REGLA:
+Debe de estar entre comillas 
+"""
+def t_STRINGLIT(t):
+    r'\"([^\"\\]|\\.)*\"|\'([^\'\\]|\\.)*\''
+    t.value = bytes(t.value[1:-1], "utf-8").decode("unicode_escape")
+    return t
 
 #Reconocimiento de números
 """
@@ -118,9 +132,15 @@ def p_Statements(p):
 def p_Statement(p):
     """
     Statement : Assignment
+                | Return
     """
     p[0] = p[1]
 
+def p_Return(p):
+    """
+    Return : RETURN Expression ';'
+    """
+    p[0] = Return(p[2])
 
 def p_Assignment(p):
     """
@@ -151,27 +171,52 @@ def p_Term(p):
     else:
         p[0] = BinaryOp(p[2], p[1], p[3])
 
-def p_Factor(p):
+def p_Factor_int(p):
     """
     Factor : INTLIT
-           | DOUBLELIT
-           | ID
-           | '(' Expression ')'
     """
-    if len(p) == 2:
-        if isinstance(p[1], int):
-            p[0] = Literal(p[1], 'INT')
-        elif isinstance(p[1], float):
-            p[0] = Literal(p[1], 'DOUBLE')
-        else:
-            p[0] = Variable(p[1], None)
-    else:
-        p[0] = p[2]
+    p[0] = Literal(p[1], "INT")
+
+
+def p_Factor_double(p):
+    """
+    Factor : DOUBLELIT
+    """
+    p[0] = Literal(p[1], "DOUBLE")
+
+
+def p_Factor_string(p):
+    """
+    Factor : STRINGLIT
+    """
+    p[0] = Literal(p[1], "STRING")
+
+def p_Factor_bool(p):
+    """
+    Factor : TRUE
+           | FALSE
+    """
+    p[0] = Literal(p[1] == "true", "BOOL")
+
+def p_Factor_variable(p):
+    """
+    Factor : ID
+    """
+    p[0] = Variable(p[1], None)
+
+
+def p_Factor_group(p):
+    """
+    Factor : '(' Expression ')'
+    """
+    p[0] = p[2]
 
 def p_Type(p):
     """
     Type : INT
-         | DOUBLE
+         | DOUBLE 
+         | STRING
+         | BOOL
     """
     p[0] = p[1]
 
@@ -182,7 +227,10 @@ def p_empty(p):
     p[0] = None
 
 def p_error(p):
-    print("Syntax error in input!", p)
+    if p:
+        print(f"Syntax error: token={p.type}, value={p.value}, line={p.lineno}")
+    else:
+        print("Syntax error: unexpected end of input")
 
 #%%
 """
@@ -271,11 +319,14 @@ double main()
     int x;
     int y;
     int z;
+    bool a;
 
     x = 10;
     y = 2;
     z = x + y;
+    a = false;
 
+    return y;
 }
 """
 lexer = lex.lex()
@@ -288,11 +339,15 @@ if tree is None:
 # Configuración inicial LLVM IR:
 intType = ir.IntType(32)
 doubleType = ir.DoubleType()
+stringType = ir.IntType(8).as_pointer()
+boolType = ir.IntType(1)
 
 if tree.return_type == "int":
     returnType = intType
 elif tree.return_type == "double":
     returnType = doubleType
+elif tree.return_type == "string":
+    returnType = stringType
 else:
     raise ValueError(f"Tipo de retorno desconocido: {tree.return_type}")
 
@@ -306,16 +361,21 @@ builder = ir.IRBuilder(block)
 
 print(tree)
 
-irgen = IRGenerator(builder, intType, doubleType)
+irgen = IRGenerator(builder, intType, doubleType, stringType, boolType)
 tree.accept(irgen)
 
-result, result_type = irgen.stack.pop()
+if irgen.return_value is None:
+    result, result_type = irgen.stack.pop()
+else:
+    result, result_type = irgen.return_value
+
 if tree.return_type == "double" and result_type == "int":
     # Signed integer to floating point
     result = builder.sitofp(result, doubleType)
-
 elif tree.return_type == "int" and result_type == "double":
     raise TypeError("No se puede retornar double desde una función 'INT' sin conversión explícita")
+elif tree.return_type != result_type:
+    raise TypeError(f"No se puede asignar '{result_type}' a '{tree.return_type}'")
 
 builder.ret(result)
 
