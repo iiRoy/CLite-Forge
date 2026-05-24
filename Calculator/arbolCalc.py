@@ -7,6 +7,7 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
+from llvmlite import ir
 
 # Abstract Base Class:
 # Una clase abstracta es una clase que funciona como plantilla. 
@@ -110,11 +111,15 @@ class Visitor(ABC):
         pass
 
 class IRGenerator(Visitor):
-    def __init__(self):
+    def __init__(self, builder, intType):
         self.stack = []
+        self.builder = builder
+        self.intType = intType
 
     def visit_literal(self, node: Literal) -> None:
-        self.stack.append(ir.Constant(intType, node.value))
+        self.stack.append(
+            ir.Constant(self.intType, node.value)
+        )
 
     def visit_variable(self, node: Variable) -> None:
         pass
@@ -122,19 +127,20 @@ class IRGenerator(Visitor):
     def visit_binary_op(self, node: BinaryOp) -> None:
         node.lhs.accept(self)
         node.rhs.accept(self)
+
         rhs = self.stack.pop()
         lhs = self.stack.pop()
 
         if node.op == '+':
-            result = builder.add(lhs, rhs)
+            result = self.builder.add(lhs, rhs)
         elif node.op == '-':
-            result = builder.sub(lhs, rhs)
+            result = self.builder.sub(lhs, rhs)
         elif node.op == '*':
-            result = builder.mul(lhs, rhs)
+            result = self.builder.mul(lhs, rhs)
         elif node.op == '/':
-            result = builder.sdiv(lhs, rhs)
+            result = self.builder.sdiv(lhs, rhs)
         elif node.op == '%':
-            result = builder.srem(lhs, rhs)
+            result = self.builder.srem(lhs, rhs)
         else:
             raise ValueError(f"Operador desconocido: {node.op}")
         

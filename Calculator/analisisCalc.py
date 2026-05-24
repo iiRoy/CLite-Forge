@@ -106,7 +106,7 @@ lexer  = lex.lex()
 parser = yacc.yacc()
 
 root = parser.parse(data)
-irgen = IRGenerator()
+irgen = IRGenerator(builder, intType)
 root.accept(irgen)
 
 # Al esperar un elemento LLVM, del método IRGenerator saca el
