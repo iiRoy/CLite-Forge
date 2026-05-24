@@ -9,17 +9,16 @@ from abc import ABC, abstractmethod
 from typing import Any
 from llvmlite import ir
 
-# Abstract Base Class:
-# Una clase abstracta es una clase que funciona como plantilla. 
-# No está pensada para usarse directamente, sino para obligar a 
-# sus clases hijas a implementar ciertos métodos.
-
 #%%
 """
 ================================================================ 
             A B S T R A C T   S Y N T A X   T R E E
 ================================================================
 """
+# Abstract Base Class:
+# Una clase abstracta es una clase que funciona como plantilla. 
+# No está pensada para usarse directamente, sino para obligar a 
+# sus clases hijas a implementar ciertos métodos.
 
 """
 Ejemplo:
