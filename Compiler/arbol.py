@@ -59,6 +59,11 @@ class ASTNode(ABC):
     def accept(self, visitor: Visitor) -> None:
         pass
 
+"""
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+                        R o o t
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+"""
 class Program(ASTNode):
     def __init__(self, return_type: str, name: str, decls: Any, stmts: ASTNode) -> None:
         self.return_type = return_type
@@ -69,6 +74,11 @@ class Program(ASTNode):
     def accept(self, visitor: Visitor):
         visitor.visit_program(self)
 
+"""
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+               D e c l a r a t i o n s
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+"""
 class Declaration(ASTNode):
     def __init__(self, var_type: str, name: str, initializer: ASTNode = None) -> None:
         self.var_type = var_type
@@ -91,6 +101,11 @@ class Declarations(ASTNode):
     def __str__(self):
         return f"[DECLS, {self.declarations}]"
 
+"""
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+        S t a t e m e n t    C o n t a i n e r
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+"""
 class Statements(ASTNode):
     def __init__(self, statements: list[Assignment]) -> None:
         self.statements = statements
@@ -101,6 +116,11 @@ class Statements(ASTNode):
     def __str__(self):
         return f"[STMTS, {self.statements}]"
 
+"""
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+                  S t a t e m e n t s
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+"""
 class Assignment(ASTNode):
     def __init__(self, variable: Any, expression: ASTNode) -> None:
         self.variable = variable
@@ -112,6 +132,72 @@ class Assignment(ASTNode):
     def __str__(self):
         return f"[ASSIGN, {self.variable}, {self.expression}]"
 
+class Print(ASTNode):
+    def __init__(self, args: list[ASTNode]) -> None:
+        self.args = args
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_print(self)
+
+    def __str__(self):
+        return f"[PRINT, {self.args}]"
+
+class IfStatement(ASTNode):
+    def __init__(self, condition: ASTNode, then_stmts: Statements, else_stmts: Statements = None) -> None:
+        self.condition = condition
+        self.then_stmts = then_stmts
+        self.else_stmts = else_stmts
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_if_statement(self)
+
+    def __str__(self):
+        return f"[IF, {self.condition}, {self.then_stmts}, {self.else_stmts}]"
+
+class Return(ASTNode):
+    def __init__(self, expression: ASTNode) -> None:
+        self.expression = expression
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_return(self)
+
+    def __str__(self):
+        return f"[RETURN, {self.expression}]"
+
+"""
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+                 E x p r e s s i o n s
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+"""
+class BinaryOp(ASTNode):
+    def __init__(self, op: str, lhs: ASTNode, rhs: ASTNode) -> None:
+        self.lhs = lhs
+        self.rhs = rhs
+        self.op = op
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_binary_op(self)
+
+    def __str__(self):
+        return f"[{self.op}, {self.lhs}, {self.rhs}]"
+
+class CompareOp(ASTNode):
+    def __init__(self, op: str, lhs: ASTNode, rhs: ASTNode) -> None:
+        self.op = op
+        self.lhs = lhs
+        self.rhs = rhs
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_compare_op(self)
+
+    def __str__(self):
+        return f"[CMP, {self.op}, {self.lhs}, {self.rhs}]"
+
+"""
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+                   O p e r a n d s
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+"""
 class Literal(ASTNode):
     def __init__(self, value: Any, type: str) -> None:
         self.value = value
@@ -130,38 +216,6 @@ class Variable(ASTNode):
 
     def accept(self, visitor: Visitor):
         visitor.visit_variable(self)
-
-class BinaryOp(ASTNode):
-    def __init__(self, op: str, lhs: ASTNode, rhs: ASTNode) -> None:
-        self.lhs = lhs
-        self.rhs = rhs
-        self.op = op
-
-    def accept(self, visitor: Visitor):
-        visitor.visit_binary_op(self)
-
-    def __str__(self):
-        return f"[{self.op}, {self.lhs}, {self.rhs}]"
-
-class Print(ASTNode):
-    def __init__(self, args: list[ASTNode]) -> None:
-        self.args = args
-
-    def accept(self, visitor: Visitor):
-        visitor.visit_print(self)
-
-    def __str__(self):
-        return f"[PRINT, {self.args}]"
-
-class Return(ASTNode):
-    def __init__(self, expression: ASTNode) -> None:
-        self.expression = expression
-
-    def accept(self, visitor: Visitor):
-        visitor.visit_return(self)
-
-    def __str__(self):
-        return f"[RETURN, {self.expression}]"
 
 #%%
 """
@@ -210,11 +264,19 @@ class Visitor(ABC):
         pass
 
     @abstractmethod
+    def visit_if_statement(self, node: IfStatement) -> None:
+        pass
+
+    @abstractmethod
+    def visit_compare_op(self, node: CompareOp) -> None:
+        pass
+
+    @abstractmethod
     def visit_return(self, node: Return) -> None:
         pass
 
 class IRGenerator(Visitor):
-    def __init__(self, builder, intType, doubleType, stringType, boolType, module):
+    def __init__(self, builder, intType, doubleType, stringType, boolType, module, return_type):
         # Pila temporal donde el IRGenerator guarda resultados mientras evalúa expresiones.
         # La pila guarda tuplas
         self.stack = []
@@ -240,7 +302,7 @@ class IRGenerator(Visitor):
         self.boolType = ir.IntType(1)
 
         # Guardar el valor que aparece en un return
-        self.return_value = None
+        self.return_type = return_type
 
         self.module = module
         self.string_count = 0
@@ -382,10 +444,10 @@ class IRGenerator(Visitor):
 
     def visit_statements(self, node: Statements) -> None:
         for statement in node.statements:
-            statement.accept(self)
-
-            if self.return_value is not None:
+            if self.builder.block.is_terminated:
                 break
+
+            statement.accept(self)
 
     def visit_assignment(self, node: Assignment) -> None:
         node.expression.accept(self)
@@ -484,9 +546,97 @@ class IRGenerator(Visitor):
 
         self.builder.call(self.printf, printf_args)
 
+    def visit_if_statement(self, node: IfStatement) -> None:
+        node.condition.accept(self)
+
+        condition, condition_type = self.stack.pop()
+
+        if condition_type != "bool":
+            raise TypeError("La condición del if debe ser bool")
+
+        current_function = self.builder.function
+
+        then_block = current_function.append_basic_block("if.then")
+        merge_block = current_function.append_basic_block("if.end")
+
+        if node.else_stmts is not None:
+            else_block = current_function.append_basic_block("if.else")
+        else:
+            else_block = merge_block
+
+        self.builder.cbranch(condition, then_block, else_block)
+
+        # THEN
+        self.builder.position_at_end(then_block)
+        node.then_stmts.accept(self)
+
+        then_terminated = self.builder.block.is_terminated
+
+        if not then_terminated:
+            self.builder.branch(merge_block)
+
+        # ELSE
+        else_terminated = False
+
+        if node.else_stmts is not None:
+            self.builder.position_at_end(else_block)
+            node.else_stmts.accept(self)
+
+            else_terminated = self.builder.block.is_terminated
+
+            if not else_terminated:
+                self.builder.branch(merge_block)
+
+        # CONTINUACIÓN
+        if node.else_stmts is not None and then_terminated and else_terminated:
+            self.builder.position_at_end(merge_block)
+            self.builder.unreachable()
+        else:
+            self.builder.position_at_end(merge_block)
+
+    def visit_compare_op(self, node: CompareOp) -> None:
+        node.lhs.accept(self)
+        node.rhs.accept(self)
+
+        rhs, rhs_type = self.stack.pop()
+        lhs, lhs_type = self.stack.pop()
+
+        if lhs_type == "string" or rhs_type == "string":
+            raise TypeError(f"No se puede comparar {lhs_type} con {rhs_type}")
+
+        if lhs_type == "bool" or rhs_type == "bool":
+            if lhs_type != rhs_type:
+                raise TypeError(f"No se puede comparar {lhs_type} con {rhs_type}")
+
+            result = self.builder.icmp_signed(node.op, lhs, rhs)
+            self.stack.append((result, "bool"))
+            return
+
+        if lhs_type == "double" or rhs_type == "double":
+            if lhs_type == "int":
+                lhs = self.builder.sitofp(lhs, self.doubleType)
+
+            if rhs_type == "int":
+                rhs = self.builder.sitofp(rhs, self.doubleType)
+
+            result = self.builder.fcmp_ordered(node.op, lhs, rhs)
+            self.stack.append((result, "bool"))
+            return
+
+        result = self.builder.icmp_signed(node.op, lhs, rhs)
+        self.stack.append((result, "bool"))
+
     def visit_return(self, node: Return) -> None:
         node.expression.accept(self)
 
         value, value_type = self.stack.pop()
-        self.return_value = (value, value_type)
+
+        if self.return_type == "double" and value_type == "int":
+            value = self.builder.sitofp(value, self.doubleType)
+            value_type = "double"
+
+        elif self.return_type != value_type:
+            raise TypeError(f"No se puede retornar '{value_type}' desde una función '{self.return_type}'")
+
+        self.builder.ret(value)
 # %%

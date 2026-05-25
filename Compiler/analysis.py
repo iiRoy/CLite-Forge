@@ -9,7 +9,7 @@
 import ply.lex as lex
 import ply.yacc as yacc
 
-from arbol import Visitor, IRGenerator, Program, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print
+from arbol import Visitor, IRGenerator, Program, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp
 from llvmlite import ir
 
 # %%
@@ -27,13 +27,15 @@ reserved = {
     'true': 'TRUE',
     'false': 'FALSE',
     'return': 'RETURN',
-    'printf': 'PRINTF'
+    'printf': 'PRINTF',
+    'if': 'IF',
+    'else': 'ELSE'
 }
 
-tokens = ['ID', 'INTLIT', 'DOUBLELIT', 'STRINGLIT'] + list(reserved.values())
+tokens = ['ID', 'INTLIT', 'DOUBLELIT', 'STRINGLIT', 'EQ', 'NE', 'LE', 'GE'] + list(reserved.values())
 t_ignore = ' \t'
 
-literals = '+-*/%(){},;='
+literals = '+-*/%(){},;=<>'
 
 #Reconocimiento de nombres
 """
@@ -82,6 +84,11 @@ def t_INTLIT(t):
     t.value = int(t.value)
     return t
 
+t_EQ = r'=='
+t_NE = r'!='
+t_LE = r'<='
+t_GE = r'>='
+
 #Reconocimiento de saltos de lineas
 def t_newline(t):
     r'\n+'
@@ -110,11 +117,38 @@ def t_error(t):
 ================================================================
 """
 
+"""
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+                    E s s e n t i a l
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+"""
+
 def p_Program(p):
     """
     Program : Type ID '(' ')' '{' Declarations Statements '}'
     """
     p[0] = Program(p[1], p[2], p[6], p[7])
+
+"""
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+                        T y p e s
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+"""
+
+def p_Type(p):
+    """
+    Type : INT
+         | DOUBLE 
+         | STRING
+         | BOOL
+    """
+    p[0] = p[1]
+
+"""
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+                 D e c l a r a t i o n s
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+"""
 
 def p_Declarations(p):
     """
@@ -138,6 +172,11 @@ def p_Declaration(p):
     else:
         p[0] = Declaration(p[1], p[2], p[4])
 
+"""
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+                  S t a t e m e n t s
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+"""
 
 def p_Statements(p):
     """
@@ -156,14 +195,50 @@ def p_Statement(p):
     Statement : Assignment
                 | Return
                 | Print
+                | IfStatement
     """
     p[0] = p[1]
+
+"""
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+    S t a t e m e n t    I m p l e m e n t a t i o n
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+"""
+def p_Assignment(p):
+    """
+    Assignment : ID '=' Expression ';'
+    """
+    p[0] = Assignment(p[1], p[3])
+
+def p_IfStatement_if(p):
+    """
+    IfStatement : IF '(' Condition ')' '{' Statements '}'
+    """
+    p[0] = IfStatement(p[3], p[6], None)
+
+def p_IfStatement_if_else(p):
+    """
+    IfStatement : IF '(' Condition ')' '{' Statements '}' ELSE '{' Statements '}'
+    """
+    p[0] = IfStatement(p[3], p[6], p[10])
 
 def p_Print(p):
     """
     Print : PRINTF '(' Arguments ')' ';'
     """
     p[0] = Print(p[3])
+
+def p_Return(p):
+    """
+    Return : RETURN Expression ';'
+    """
+    p[0] = Return(p[2])
+
+"""
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+                    A r g u m e n t s
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+"""
 
 def p_Arguments_one(p):
     """
@@ -178,17 +253,35 @@ def p_Arguments_many(p):
     p[1].append(p[3])
     p[0] = p[1]
 
-def p_Return(p):
-    """
-    Return : RETURN Expression ';'
-    """
-    p[0] = Return(p[2])
+"""
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+                  C o n d i t i o n s
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+"""
 
-def p_Assignment(p):
+def p_Condition_compare(p):
     """
-    Assignment : ID '=' Expression ';'
+    Condition : Expression '<' Expression
+              | Expression '>' Expression
+              | Expression EQ Expression
+              | Expression NE Expression
+              | Expression LE Expression
+              | Expression GE Expression
     """
-    p[0] = Assignment(p[1], p[3])
+    p[0] = CompareOp(p[2], p[1], p[3])
+
+
+def p_Condition_bool(p):
+    """
+    Condition : Expression
+    """
+    p[0] = p[1]
+
+"""
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+                  E x p r e s s i o n s
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+"""
 
 def p_Expression(p):
     """
@@ -212,6 +305,12 @@ def p_Term(p):
         p[0] = p[1]
     else:
         p[0] = BinaryOp(p[2], p[1], p[3])
+
+"""
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+                     F a c t o r s
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+"""
 
 def p_Factor_int(p):
     """
@@ -242,7 +341,8 @@ def p_Factor_bool(p):
 
 def p_Factor_variable(p):
     """
-    Factor : ID
+    Factor : ID  %".15" = sitofp i32 0 to double
+  ret double %".15"
     """
     p[0] = Variable(p[1], None)
 
@@ -253,15 +353,11 @@ def p_Factor_group(p):
     """
     p[0] = p[2]
 
-def p_Type(p):
-    """
-    Type : INT
-         | DOUBLE 
-         | STRING
-         | BOOL
-    """
-    p[0] = p[1]
-
+"""
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+                      H e l p e r s
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+"""
 def p_empty(p):
     """
     empty :
@@ -332,7 +428,7 @@ Cuando el parser encuentra una declaración como:
 int x;
 la reconoce con la regla:
 Declaration : ID ID ';'
-
+tree.return_type
 Entonces el parser puede combinar:
 Declarations([]) + Declaration("int", "x")
 usando la regla:
@@ -363,7 +459,11 @@ double main()
     bool a = TRUE;
     double z;
 
-    z = x + y;
+    if (x > 5) {
+        z = x + y;
+    } else {
+        return 0;
+    }
 
     printf("z = %i\n", z);
 
@@ -404,21 +504,11 @@ builder = ir.IRBuilder(block)
 
 print(tree)
 
-irgen = IRGenerator(builder, intType, doubleType, stringType, boolType, module)
+irgen = IRGenerator(builder, intType, doubleType, stringType, boolType, module, tree.return_type)
 tree.accept(irgen)
 
-if irgen.return_value is None:
-    result, result_type = irgen.stack.pop()
-else:
-    result, result_type = irgen.return_value
-
-if tree.return_type == "double" and result_type == "int":
-    # Signed integer to floating point
-    result = builder.sitofp(result, doubleType)
-elif tree.return_type != result_type:
-    raise TypeError(f"No se puede asignar '{result_type}' a '{tree.return_type}'")
-
-builder.ret(result)
+if not builder.block.is_terminated:
+    raise TypeError("La función no tiene return en todos los caminos")
 
 print(module)
 # %%
