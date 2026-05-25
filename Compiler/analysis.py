@@ -9,7 +9,7 @@
 import ply.lex as lex
 import ply.yacc as yacc
 
-from arbol import Visitor, IRGenerator, Program, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp
+from arbol import Visitor, IRGenerator, Program, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break
 from llvmlite import ir
 
 # %%
@@ -29,13 +29,17 @@ reserved = {
     'return': 'RETURN',
     'printf': 'PRINTF',
     'if': 'IF',
-    'else': 'ELSE'
+    'else': 'ELSE',
+    'switch': 'SWITCH',
+    'case': 'CASE',
+    'default': 'DEFAULT',
+    'break': 'BREAK'
 }
 
 tokens = ['ID', 'INTLIT', 'DOUBLELIT', 'STRINGLIT', 'EQ', 'NE', 'LE', 'GE'] + list(reserved.values())
 t_ignore = ' \t'
 
-literals = '+-*/%(){},;=<>'
+literals = '+-*/%(){},;=<>!:'
 
 #Reconocimiento de nombres
 """
@@ -196,6 +200,8 @@ def p_Statement(p):
                 | Return
                 | Print
                 | IfStatement
+                | SwitchStatement
+                | Break
     """
     p[0] = p[1]
 
@@ -227,6 +233,45 @@ def p_Print(p):
     Print : PRINTF '(' Arguments ')' ';'
     """
     p[0] = Print(p[3])
+
+def p_SwitchStatement(p):
+    """
+    SwitchStatement : SWITCH '(' Expression ')' '{' SwitchCases DefaultCase '}'
+    """
+    p[0] = SwitchStatement(p[3], p[6], p[7])
+
+def p_SwitchCases(p):
+    """
+    SwitchCases : SwitchCases SwitchCase
+                | empty
+    """
+    if len(p) == 2:
+        p[0] = []
+    else:
+        p[1].append(p[2])
+        p[0] = p[1]
+
+def p_SwitchCase(p):
+    """
+    SwitchCase : CASE INTLIT ':' Statements
+    """
+    p[0] = SwitchCase(p[2], p[4])
+
+def p_DefaultCase(p):
+    """
+    DefaultCase : DEFAULT ':' Statements
+                | empty
+    """
+    if len(p) == 2:
+        p[0] = None
+    else:
+        p[0] = p[3]
+
+def p_Break(p):
+    """
+    Break : BREAK ';'
+    """
+    p[0] = Break()
 
 def p_Return(p):
     """
@@ -339,10 +384,15 @@ def p_Factor_bool(p):
     """
     p[0] = Literal(p[1], "BOOL")
 
+def p_Factor_not(p):
+    """
+    Factor : '!' Factor
+    """
+    p[0] = UnaryOp('!', p[2])
+
 def p_Factor_variable(p):
     """
-    Factor : ID  %".15" = sitofp i32 0 to double
-  ret double %".15"
+    Factor : ID
     """
     p[0] = Variable(p[1], None)
 
@@ -454,19 +504,38 @@ Declarations([
 data = """
 double main()
 {
-    int x = 10;
-    double y = 21 - 0.5;
-    bool a = TRUE;
+    // MAIN DECLARATIONS
+    double x = 10 - 0.5;
+    int y = 2;
     double z;
 
-    if (x > 5) {
+    // CASE 1: IF STATEMENT
+    /*
+    bool a = TRUE;
+
+    if (true == !a) {
         z = x + y;
     } else {
         return 0;
     }
+    */
 
+    // CASE 2: SWITCH STATEMENT
+    switch (y) {
+        case 1:
+            z = 10;
+            return 1;
+
+        case 2:
+            z = x + y;
+            break;
+
+        default:
+            return 0;
+    }
+
+    //END CASE
     printf("z = %i\n", z);
-
     return z;
 }
 """

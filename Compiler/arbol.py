@@ -154,6 +154,38 @@ class IfStatement(ASTNode):
     def __str__(self):
         return f"[IF, {self.condition}, {self.then_stmts}, {self.else_stmts}]"
 
+class SwitchCase(ASTNode):
+    def __init__(self, value: int, statements: Statements) -> None:
+        self.value = value
+        self.statements = statements
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_switch_case(self)
+
+    def __str__(self):
+        return f"[CASE, {self.value}, {self.statements}]"
+
+
+class SwitchStatement(ASTNode):
+    def __init__(self, expression: ASTNode, cases: list[SwitchCase], default_stmts: Statements = None) -> None:
+        self.expression = expression
+        self.cases = cases
+        self.default_stmts = default_stmts
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_switch_statement(self)
+
+    def __str__(self):
+        return f"[SWITCH, {self.expression}, {self.cases}, {self.default_stmts}]"
+
+
+class Break(ASTNode):
+    def accept(self, visitor: Visitor):
+        visitor.visit_break(self)
+
+    def __str__(self):
+        return "[BREAK]"
+
 class Return(ASTNode):
     def __init__(self, expression: ASTNode) -> None:
         self.expression = expression
@@ -192,6 +224,17 @@ class CompareOp(ASTNode):
 
     def __str__(self):
         return f"[CMP, {self.op}, {self.lhs}, {self.rhs}]"
+
+class UnaryOp(ASTNode):
+    def __init__(self, op: str, expression: ASTNode) -> None:
+        self.op = op
+        self.expression = expression
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_unary_op(self)
+
+    def __str__(self):
+        return f"[{self.op}, {self.expression}]"
 
 """
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
@@ -256,6 +299,14 @@ class Visitor(ABC):
         pass
 
     @abstractmethod
+    def visit_compare_op(self, node: CompareOp) -> None:
+        pass
+
+    @abstractmethod
+    def visit_unary_op(self, node: UnaryOp) -> None:
+        pass
+
+    @abstractmethod
     def visit_assignment(self, node: Assignment) -> None:
         pass
 
@@ -268,7 +319,15 @@ class Visitor(ABC):
         pass
 
     @abstractmethod
-    def visit_compare_op(self, node: CompareOp) -> None:
+    def visit_switch_statement(self, node: SwitchStatement) -> None:
+        pass
+
+    @abstractmethod
+    def visit_switch_case(self, node: SwitchCase) -> None:
+        pass
+
+    @abstractmethod
+    def visit_break(self, node: Break) -> None:
         pass
 
     @abstractmethod
@@ -306,6 +365,9 @@ class IRGenerator(Visitor):
 
         self.module = module
         self.string_count = 0
+
+        # Guarda los bloques de SWITCH CASES que aún no han sido saltados
+        self.break_blocks = []
 
         printf_type = ir.FunctionType(
             self.intType,
@@ -523,6 +585,53 @@ class IRGenerator(Visitor):
 
             self.stack.append((result, "int"))
 
+    def visit_compare_op(self, node: CompareOp) -> None:
+        node.lhs.accept(self)
+        node.rhs.accept(self)
+
+        rhs, rhs_type = self.stack.pop()
+        lhs, lhs_type = self.stack.pop()
+
+        if lhs_type == "string" or rhs_type == "string":
+            raise TypeError(f"No se puede comparar {lhs_type} con {rhs_type}")
+
+        if lhs_type == "bool" or rhs_type == "bool":
+            if lhs_type != rhs_type:
+                raise TypeError(f"No se puede comparar {lhs_type} con {rhs_type}")
+
+            result = self.builder.icmp_signed(node.op, lhs, rhs)
+            self.stack.append((result, "bool"))
+            return
+
+        if lhs_type == "double" or rhs_type == "double":
+            if lhs_type == "int":
+                lhs = self.builder.sitofp(lhs, self.doubleType)
+
+            if rhs_type == "int":
+                rhs = self.builder.sitofp(rhs, self.doubleType)
+
+            result = self.builder.fcmp_ordered(node.op, lhs, rhs)
+            self.stack.append((result, "bool"))
+            return
+
+        result = self.builder.icmp_signed(node.op, lhs, rhs)
+        self.stack.append((result, "bool"))
+
+    def visit_unary_op(self, node: UnaryOp) -> None:
+        node.expression.accept(self)
+
+        value, value_type = self.stack.pop()
+
+        if node.op == "!":
+            if value_type != "bool":
+                raise TypeError("El operador ! solo se puede usar con booleanos")
+
+            result = self.builder.not_(value)
+            self.stack.append((result, "bool"))
+
+        else:
+            raise ValueError(f"Operador unario desconocido: {node.op}")
+
     def visit_print(self, node: Print) -> None:
         if len(node.args) == 0:
             raise TypeError("printf necesita al menos un argumento")
@@ -594,37 +703,62 @@ class IRGenerator(Visitor):
         else:
             self.builder.position_at_end(merge_block)
 
-    def visit_compare_op(self, node: CompareOp) -> None:
-        node.lhs.accept(self)
-        node.rhs.accept(self)
+    def visit_switch_statement(self, node: SwitchStatement) -> None:
+        node.expression.accept(self)
 
-        rhs, rhs_type = self.stack.pop()
-        lhs, lhs_type = self.stack.pop()
+        switch_value, switch_type = self.stack.pop()
 
-        if lhs_type == "string" or rhs_type == "string":
-            raise TypeError(f"No se puede comparar {lhs_type} con {rhs_type}")
+        if switch_type != "int":
+            raise TypeError("El switch por ahora solo acepta expresiones int")
 
-        if lhs_type == "bool" or rhs_type == "bool":
-            if lhs_type != rhs_type:
-                raise TypeError(f"No se puede comparar {lhs_type} con {rhs_type}")
+        current_function = self.builder.function
 
-            result = self.builder.icmp_signed(node.op, lhs, rhs)
-            self.stack.append((result, "bool"))
-            return
+        end_block = current_function.append_basic_block("switch.end")
 
-        if lhs_type == "double" or rhs_type == "double":
-            if lhs_type == "int":
-                lhs = self.builder.sitofp(lhs, self.doubleType)
+        if node.default_stmts is not None:
+            default_block = current_function.append_basic_block("switch.default")
+        else:
+            default_block = end_block
 
-            if rhs_type == "int":
-                rhs = self.builder.sitofp(rhs, self.doubleType)
+        switch_instr = self.builder.switch(switch_value, default_block)
 
-            result = self.builder.fcmp_ordered(node.op, lhs, rhs)
-            self.stack.append((result, "bool"))
-            return
+        case_blocks = []
 
-        result = self.builder.icmp_signed(node.op, lhs, rhs)
-        self.stack.append((result, "bool"))
+        for case in node.cases:
+            case_block = current_function.append_basic_block(f"switch.case.{case.value}")
+            case_blocks.append((case, case_block))
+
+            case_value = ir.Constant(self.intType, case.value)
+            switch_instr.add_case(case_value, case_block)
+
+        self.break_blocks.append(end_block)
+
+        for case, case_block in case_blocks:
+            self.builder.position_at_end(case_block)
+            case.statements.accept(self)
+
+            if not self.builder.block.is_terminated:
+                self.builder.branch(end_block)
+
+        if node.default_stmts is not None:
+            self.builder.position_at_end(default_block)
+            node.default_stmts.accept(self)
+
+            if not self.builder.block.is_terminated:
+                self.builder.branch(end_block)
+
+        self.break_blocks.pop()
+
+        self.builder.position_at_end(end_block)
+
+    def visit_switch_case(self, node: SwitchCase) -> None:
+        node.statements.accept(self)
+
+    def visit_break(self, node: Break) -> None:
+        if not self.break_blocks:
+            raise SyntaxError("break solo puede usarse dentro de switch")
+
+        self.builder.branch(self.break_blocks[-1])
 
     def visit_return(self, node: Return) -> None:
         node.expression.accept(self)
