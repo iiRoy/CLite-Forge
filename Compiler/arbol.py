@@ -70,15 +70,16 @@ class Program(ASTNode):
         visitor.visit_program(self)
 
 class Declaration(ASTNode):
-    def __init__(self, var_type: str, name: str) -> None:
+    def __init__(self, var_type: str, name: str, initializer: ASTNode = None) -> None:
         self.var_type = var_type
         self.name = name
+        self.initializer = initializer
 
     def accept(self, visitor: Visitor):
         visitor.visit_declaration(self)
 
     def __str__(self):
-        return f"[DECL, {self.var_type}, {self.name}]"
+        return f"[DECL, {self.var_type}, {self.name}, {self.initializer}]"
 
 class Declarations(ASTNode):
     def __init__(self, declarations: list[Declaration]) -> None:
@@ -142,6 +143,16 @@ class BinaryOp(ASTNode):
     def __str__(self):
         return f"[{self.op}, {self.lhs}, {self.rhs}]"
 
+class Print(ASTNode):
+    def __init__(self, args: list[ASTNode]) -> None:
+        self.args = args
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_print(self)
+
+    def __str__(self):
+        return f"[PRINT, {self.args}]"
+
 class Return(ASTNode):
     def __init__(self, expression: ASTNode) -> None:
         self.expression = expression
@@ -195,19 +206,81 @@ class Visitor(ABC):
         pass
 
     @abstractmethod
+    def visit_print(self, node: Print) -> None:
+        pass
+
+    @abstractmethod
     def visit_return(self, node: Return) -> None:
         pass
 
 class IRGenerator(Visitor):
-    def __init__(self, builder, intType, doubleType, stringType, boolType):
+    def __init__(self, builder, intType, doubleType, stringType, boolType, module):
+        # Pila temporal donde el IRGenerator guarda resultados mientras evalúa expresiones.
+        # La pila guarda tuplas
         self.stack = []
+
+        # Es la tabla de símbolos.
+        # Sirve para recordar dónde vive cada variable.
+        """
+        self.symbol_table = {
+            "x": (ptr_x, "int"),
+            "y": (ptr_y, "double")
+        }
+        """
+        # ptr_x y ptr_y son direcciones de memoria generadas con alloca.
         self.symbol_table = {}
+
+        # Objeto que escribe instrucciones LLVM.
         self.builder = builder
+
+        # Tipos de datos para el LLVM
         self.intType = intType
         self.doubleType = doubleType
         self.stringType = stringType
         self.boolType = ir.IntType(1)
+
+        # Guardar el valor que aparece en un return
         self.return_value = None
+
+        self.module = module
+        self.string_count = 0
+
+        printf_type = ir.FunctionType(
+            self.intType,
+            [self.stringType],
+            var_arg=True
+        )
+
+        self.printf = ir.Function(
+            self.module,
+            printf_type,
+            name="printf"
+        )
+    
+    def create_global_string(self, text: str):
+        text = text + "\0"
+
+        string_type = ir.ArrayType(ir.IntType(8), len(text))
+
+        string_value = ir.Constant(
+            string_type,
+            bytearray(text.encode("utf8"))
+        )
+
+        name = f".str{self.string_count}"
+        self.string_count = self.string_count + 1
+
+        global_string = ir.GlobalVariable(
+            self.module,
+            string_type,
+            name=name
+        )
+
+        global_string.linkage = "internal"
+        global_string.global_constant = True
+        global_string.initializer = string_value
+
+        return self.builder.bitcast(global_string, self.stringType)
 
     def visit_literal(self, node: Literal) -> None:
         if node.type == "INT":
@@ -219,7 +292,7 @@ class IRGenerator(Visitor):
             self.stack.append((value, "double"))
         
         elif node.type == "STRING":
-            value = ir.Constant(self.stringType, node.value)
+            value = self.create_global_string(node.value)
             self.stack.append((value, "string"))
 
         elif node.type == "BOOL":
@@ -241,7 +314,7 @@ class IRGenerator(Visitor):
         elif node.var_type == "double":
             llvm_type = self.doubleType
             var_type = "double"
-        elif node.var_type == "string" or node.var_type == "str":
+        elif node.var_type == "string":
             llvm_type = self.stringType
             var_type = "string"
         elif node.var_type == "bool":
@@ -250,12 +323,61 @@ class IRGenerator(Visitor):
         else:
             raise ValueError(f"Tipo desconocido: {node.var_type}")
 
+        #Reserva espacio en memoria para la variable.
         ptr = self.builder.alloca(llvm_type, name=node.name)
+        #Guarda la dirección de la variable en symbol_table.
         self.symbol_table[node.name] = (ptr, var_type)
+
+        """
+        int x = 23 + 2;
+
+        1. Reserva memoria para x. (Hecho anteriormente)
+        2. Evalúa 23 + 2.
+        3. El resultado de 23 + 2 queda en stack como (%".2", "int").
+        4. Saca ese resultado.
+        5. Lo guarda en x.
+        """
+        # Si tiene una asignación "="
+        if node.initializer is not None:
+            # Inicializador, acepta al IRGenerator para que te visite y genere tu valor LLVM.
+            node.initializer.accept(self)
+
+            #Extrae los últimos elementos de la pila
+            value, value_type = self.stack.pop()
+
+            if var_type == "double" and value_type == "int":
+                value = self.builder.sitofp(value, self.doubleType)
+                value_type = "double"
+
+            elif var_type != value_type:
+                raise TypeError(f"No se puede asignar '{value_type}' a '{var_type}'")
+
+            self.builder.store(value, ptr)
+        
+        else:
+            if var_type == "int":
+                default_value = ir.Constant(self.intType, 0)
+                self.builder.store(default_value, ptr)
+            elif var_type == "double":
+                default_value = ir.Constant(self.doubleType, 0.0)
+                self.builder.store(default_value, ptr)
+            elif var_type == "string":
+                default_value = ir.Constant(self.stringType, None)
+                self.builder.store(default_value, ptr)
+            elif var_type == "bool":
+                default_value = ir.Constant(self.boolType, 0)
+                self.builder.store(default_value, ptr)
+            else:
+                raise ValueError(f"Tipo desconocido: {var_type}")
+
+            self.builder.store(default_value, ptr)
     
     def visit_variable(self, node: Variable) -> None:
+        #Recupera la dirección de memoria de la variable a guardar.
         ptr, var_type = self.symbol_table[node.name]
+        #Carga el valor de la variable a través de la memoria.
         value = self.builder.load(ptr, name=node.name)
+        #Guarda los cambios en la pila
         self.stack.append((value, var_type))
 
     def visit_statements(self, node: Statements) -> None:
@@ -269,6 +391,7 @@ class IRGenerator(Visitor):
         node.expression.accept(self)
 
         value, value_type = self.stack.pop()
+        #Recupera la dirección de memoria de la variable a guardar.
         ptr, var_type = self.symbol_table[node.variable]
 
         if var_type == "double" and value_type == "int":
@@ -282,8 +405,10 @@ class IRGenerator(Visitor):
         elif var_type != value_type:
             raise TypeError(f"No se puede asignar '{value_type}' a '{var_type}'")
 
+        #Guarda la nueva asignación de la variable
         self.builder.store(value, ptr)
 
+        #Guarda los cambios en la pila
         self.stack.append((value, var_type))
 
     def visit_binary_op(self, node: BinaryOp) -> None:
@@ -293,17 +418,18 @@ class IRGenerator(Visitor):
         rhs, rhs_type = self.stack.pop()
         lhs, lhs_type = self.stack.pop()
 
-        if lhs_type == "string" or rhs_type == "string":
-            raise TypeError(f"No se puede usar el operador {node.op} con strings")
+        invalid_types = {"string", "bool"}
 
-        if lhs_type == "bool" or rhs_type == "bool":
-            raise TypeError(f"No se puede usar el operador {node.op} con strings")
+        if lhs_type in invalid_types or rhs_type in invalid_types:
+            raise TypeError(f"No se puede usar el operador {node.op} con {lhs_type} y {rhs_type}")
 
         if lhs_type == "double" or rhs_type == "double":
             if lhs_type == "int":
+                # Signed integer to floating point
                 lhs = self.builder.sitofp(lhs, self.doubleType)
 
             if rhs_type == "int":
+                # Signed integer to floating point
                 rhs = self.builder.sitofp(rhs, self.doubleType)
 
             if node.op == "+":
@@ -334,7 +460,30 @@ class IRGenerator(Visitor):
                 raise ValueError(f"Operador desconocido: {node.op}")
 
             self.stack.append((result, "int"))
-        
+
+    def visit_print(self, node: Print) -> None:
+        if len(node.args) == 0:
+            raise TypeError("printf necesita al menos un argumento")
+
+        node.args[0].accept(self)
+        fmt_value, fmt_type = self.stack.pop()
+
+        if fmt_type != "string":
+            raise TypeError("El primer argumento de printf debe ser un string")
+
+        printf_args = [fmt_value]
+
+        for arg in node.args[1:]:
+            arg.accept(self)
+            value, value_type = self.stack.pop()
+
+            if value_type == "bool":
+                value = self.builder.zext(value, self.intType)
+
+            printf_args.append(value)
+
+        self.builder.call(self.printf, printf_args)
+
     def visit_return(self, node: Return) -> None:
         node.expression.accept(self)
 

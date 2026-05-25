@@ -9,7 +9,7 @@
 import ply.lex as lex
 import ply.yacc as yacc
 
-from arbol import Visitor, IRGenerator, Program, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment
+from arbol import Visitor, IRGenerator, Program, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print
 from llvmlite import ir
 
 # %%
@@ -26,7 +26,8 @@ reserved = {
     'bool': 'BOOL',
     'true': 'TRUE',
     'false': 'FALSE',
-    'return': 'RETURN'
+    'return': 'RETURN',
+    'printf': 'PRINTF'
 }
 
 tokens = ['ID', 'INTLIT', 'DOUBLELIT', 'STRINGLIT'] + list(reserved.values())
@@ -42,7 +43,13 @@ Después puede tener letras, números o guion bajo.
 """
 def t_ID(t):
     r'[a-zA-Z_][a-zA-Z_0-9]*'
-    t.type = reserved.get(t.value, 'ID')
+    lower_value = t.value.lower()
+    t.type = reserved.get(lower_value, 'ID')
+
+    if t.type == 'TRUE':
+        t.value = True
+    elif t.type == 'FALSE':
+        t.value = False
     return t
 
 #Reconocimiento de números decimales
@@ -80,6 +87,17 @@ def t_newline(t):
     r'\n+'
     t.lexer.lineno += len(t.value)
 
+#Reconocimiento de comentarios simples
+def t_COMMENT_SINGLELINE(t):
+    r'//.*'
+    pass
+
+#Reconocimiento de comentarios multilinea
+def t_COMMENT_MULTILINE(t):
+    r'/\*(.|\n)*?\*/'
+    t.lexer.lineno += t.value.count('\n')
+    pass
+
 #Reconocimiento de errores
 def t_error(t):
     print(f"Illegal character '{t.value[0]}'")
@@ -113,8 +131,12 @@ def p_Declarations(p):
 def p_Declaration(p):
     """
     Declaration : Type ID ';'
+                | Type ID '=' Expression ';'
     """
-    p[0] = Declaration(p[1], p[2])
+    if len(p) == 4:
+        p[0] = Declaration(p[1], p[2])
+    else:
+        p[0] = Declaration(p[1], p[2], p[4])
 
 
 def p_Statements(p):
@@ -133,7 +155,27 @@ def p_Statement(p):
     """
     Statement : Assignment
                 | Return
+                | Print
     """
+    p[0] = p[1]
+
+def p_Print(p):
+    """
+    Print : PRINTF '(' Arguments ')' ';'
+    """
+    p[0] = Print(p[3])
+
+def p_Arguments_one(p):
+    """
+    Arguments : Expression
+    """
+    p[0] = [p[1]]
+
+def p_Arguments_many(p):
+    """
+    Arguments : Arguments ',' Expression
+    """
+    p[1].append(p[3])
     p[0] = p[1]
 
 def p_Return(p):
@@ -196,7 +238,7 @@ def p_Factor_bool(p):
     Factor : TRUE
            | FALSE
     """
-    p[0] = Literal(p[1] == "true", "BOOL")
+    p[0] = Literal(p[1], "BOOL")
 
 def p_Factor_variable(p):
     """
@@ -316,17 +358,16 @@ Declarations([
 data = """
 double main()
 {
-    int x;
-    int y;
-    int z;
-    bool a;
+    int x = 10;
+    double y = 21 - 0.5;
+    bool a = TRUE;
+    double z;
 
-    x = 10;
-    y = 2;
     z = x + y;
-    a = false;
 
-    return y;
+    printf("z = %i\n", z);
+
+    return z;
 }
 """
 lexer = lex.lex()
@@ -348,6 +389,8 @@ elif tree.return_type == "double":
     returnType = doubleType
 elif tree.return_type == "string":
     returnType = stringType
+elif tree.return_type == "bool":
+    returnType = boolType
 else:
     raise ValueError(f"Tipo de retorno desconocido: {tree.return_type}")
 
@@ -361,7 +404,7 @@ builder = ir.IRBuilder(block)
 
 print(tree)
 
-irgen = IRGenerator(builder, intType, doubleType, stringType, boolType)
+irgen = IRGenerator(builder, intType, doubleType, stringType, boolType, module)
 tree.accept(irgen)
 
 if irgen.return_value is None:
@@ -372,8 +415,6 @@ else:
 if tree.return_type == "double" and result_type == "int":
     # Signed integer to floating point
     result = builder.sitofp(result, doubleType)
-elif tree.return_type == "int" and result_type == "double":
-    raise TypeError("No se puede retornar double desde una función 'INT' sin conversión explícita")
 elif tree.return_type != result_type:
     raise TypeError(f"No se puede asignar '{result_type}' a '{tree.return_type}'")
 
