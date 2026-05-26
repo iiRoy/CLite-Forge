@@ -13,7 +13,7 @@ importlib.reload(arbol)
 import ply.lex as lex
 import ply.yacc as yacc
 
-from arbol import Visitor, IRGenerator, Program, Parameter, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break, WhileStatement, DoWhileStatement, ForStatement, LogicalOp
+from arbol import Visitor, IRGenerator, Program, Parameter, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break, WhileStatement, DoWhileStatement, ForStatement, LogicalOp, Call, CallStatement
 from llvmlite import ir
 
 #%%
@@ -264,8 +264,15 @@ def p_Statement(p):
                 | WhileStatement
                 | DoWhileStatement
                 | ForStatement
+                | CallStatement
     """
     p[0] = p[1]
+
+def p_CallStatement(p):
+    """
+    CallStatement : Call ';'
+    """
+    p[0] = CallStatement(p[1])
 
 """
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
@@ -397,6 +404,16 @@ def p_Arguments_many(p):
     """
     p[1].append(p[3])
     p[0] = p[1]
+
+def p_OptionalArguments(p):
+    """
+    OptionalArguments : Arguments
+                      | empty
+    """
+    if p[1] is None:
+        p[0] = []
+    else:
+        p[0] = p[1]
 
 """
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
@@ -537,6 +554,18 @@ def p_Factor_group(p):
     """
     p[0] = p[2]
 
+def p_Call(p):
+    """
+    Call : ID '(' OptionalArguments ')'
+    """
+    p[0] = Call(p[1], p[3])
+
+def p_Factor_call(p):
+    """
+    Factor : Call
+    """
+    p[0] = p[1]
+
 """
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
                       H e l p e r s
@@ -636,66 +665,13 @@ Declarations([
 """
 
 data = """
-float main()
+int factorial(int n)
 {
-    // MAIN DECLARATIONS
-    float x = 10 - 0.5;
-    int y = 2;
-    float z;
-
-    // CASE 1: IF STATEMENT
-    /*
-    bool a = TRUE;
-    bool b = FALSE;
-
-    if (true == a && false != b) {
-        z = x + y;
-    } else {
-        return 0;
+    if (n <= 1) {
+        return 1;
     }
-    */
 
-    // CASE 2: SWITCH STATEMENT
-    
-    switch (y) {
-        case 1:
-            z = -10;
-            return 1;
-
-        case 2:
-            z = x + y;
-            break;
-
-        default:
-            return 0;
-    }
-    
-
-    // CASE 3: WHILE STATEMENT
-    /*
-    while (x < 15) {
-        x = x + 1;
-    }
-    */
-
-    // CASE 4: DO WHILE STATEMENT
-    /*
-    do {
-        x = x - 1;
-    } while (x > 5);
-    */
-
-    // CASE 5: FOR WHILE STATEMENT
-    /*
-    int i;
-    for (i = 0; i < 5; i = i + 1) {
-        x = x + i;
-    }
-    */
-
-    //END CASE
-    printf("z = %i\n", z);
-    return z;
+    return n * factorial(n - 1);
 }
 """
 lexer = lex.lex()
@@ -732,6 +708,14 @@ for param in tree.params:
 fnty = ir.FunctionType(returnType, param_types)
 func = ir.Function(module, fnty, name=tree.name)
 
+function_table = {
+    tree.name: (
+        func,
+        tree.return_type,
+        [param.var_type for param in tree.params]
+    )
+}
+
 for llvm_arg, param in zip(func.args, tree.params):
     llvm_arg.name = param.name
 
@@ -740,7 +724,7 @@ builder = ir.IRBuilder(block)
 
 print(tree)
 
-irgen = IRGenerator(builder, intType, floatType, stringType, boolType, module, tree.return_type)
+irgen = IRGenerator(builder, intType, floatType, stringType, boolType, module, tree.return_type, function_table)
 tree.accept(irgen)
 
 if not builder.block.is_terminated:
@@ -751,13 +735,10 @@ print(module)
 
 """
 Prioridad alta:
-3. function parameters
-4. function calls generales
 5. funciones además de main
 
 Prioridad media:
 6. char
-7. float
 8. bloques como statement
 9. empty statement ;
 

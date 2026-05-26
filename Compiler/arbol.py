@@ -232,6 +232,16 @@ class ForStatement(ASTNode):
     def __str__(self):
         return f"[FOR, {self.init}, {self.condition}, {self.update}, {self.stmts}]"
 
+class CallStatement(ASTNode):
+    def __init__(self, call: Call) -> None:
+        self.call = call
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_call_statement(self)
+
+    def __str__(self):
+        return f"[CALL_STMT, {self.call}]"
+
 class Return(ASTNode):
     def __init__(self, expression: ASTNode) -> None:
         self.expression = expression
@@ -281,6 +291,17 @@ class UnaryOp(ASTNode):
 
     def __str__(self):
         return f"[{self.op}, {self.expression}]"
+
+class Call(ASTNode):
+    def __init__(self, name: str, args: list[ASTNode]) -> None:
+        self.name = name
+        self.args = args
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_call(self)
+
+    def __str__(self):
+        return f"[CALL, {self.name}, {self.args}]"
 
 """
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
@@ -405,11 +426,19 @@ class Visitor(ABC):
         pass
 
     @abstractmethod
+    def visit_call(self, node: Call) -> None:
+        pass
+
+    @abstractmethod
+    def visit_call_statement(self, node: CallStatement) -> None:
+        pass
+
+    @abstractmethod
     def visit_return(self, node: Return) -> None:
         pass
 
 class IRGenerator(Visitor):
-    def __init__(self, builder, intType, floatType, stringType, boolType, module, return_type):
+    def __init__(self, builder, intType, floatType, stringType, boolType, module, return_type, functions=None):
         # Pila temporal donde el IRGenerator guarda resultados mientras evalúa expresiones.
         # La pila guarda tuplas
         self.stack = []
@@ -442,6 +471,15 @@ class IRGenerator(Visitor):
 
         # Guarda los bloques de SWITCH CASES que aún no han sido saltados
         self.break_blocks = []
+
+        # Hace una tabla de definición de funciones
+        """
+        {
+            "factorial": (llvm_function, "int", ["int"]),
+            "sum": (llvm_function, "float", ["float", "float"])
+        }
+        """
+        self.functions = functions if functions is not None else {}
 
         printf_type = ir.FunctionType(
             self.intType,
@@ -491,6 +529,16 @@ class IRGenerator(Visitor):
             return self.boolType
         else:
             raise ValueError(f"Tipo desconocido: {type_name}")
+
+    def cast_value(self, value, value_type, target_type):
+        if value_type == target_type:
+            return value, value_type
+
+        if target_type == "float" and value_type == "int":
+            value = self.builder.sitofp(value, self.floatType)
+            return value, "float"
+
+        raise TypeError(f"No se puede convertir '{value_type}' a '{target_type}'")
 
     def visit_literal(self, node: Literal) -> None:
         if node.type == "INT":
@@ -1005,6 +1053,40 @@ class IRGenerator(Visitor):
             raise ValueError(f"Operador lógico desconocido: {node.op}")
 
         self.stack.append((result, "bool"))
+
+    def visit_call(self, node: Call) -> None:
+        if node.name not in self.functions:
+            raise NameError(f"La función '{node.name}' no ha sido declarada")
+
+        llvm_func, return_type, param_types = self.functions[node.name]
+
+        if len(node.args) != len(param_types):
+            raise TypeError(
+                f"La función '{node.name}' esperaba {len(param_types)} argumentos, "
+                f"pero recibió {len(node.args)}"
+            )
+
+        call_args = []
+
+        for arg_node, expected_type in zip(node.args, param_types):
+            arg_node.accept(self)
+
+            value, value_type = self.stack.pop()
+            value, value_type = self.cast_value(value, value_type, expected_type)
+
+            call_args.append(value)
+
+        result = self.builder.call(llvm_func, call_args)
+
+        self.stack.append((result, return_type))
+
+    def visit_call_statement(self, node: CallStatement) -> None:
+        before = len(self.stack)
+
+        node.call.accept(self)
+
+        if len(self.stack) > before:
+            self.stack.pop()
 
     def visit_return(self, node: Return) -> None:
         node.expression.accept(self)
