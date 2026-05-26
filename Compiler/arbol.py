@@ -178,13 +178,23 @@ class SwitchStatement(ASTNode):
     def __str__(self):
         return f"[SWITCH, {self.expression}, {self.cases}, {self.default_stmts}]"
 
-
 class Break(ASTNode):
     def accept(self, visitor: Visitor):
         visitor.visit_break(self)
 
     def __str__(self):
         return "[BREAK]"
+
+class WhileStatement(ASTNode):
+    def __init__(self, condition: ASTNode, stmts: Statements) -> None:
+        self.condition = condition
+        self.stmts = stmts
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_while_statement(self)
+
+    def __str__(self):
+        return f"[WHILE, {self.condition}, {self.stmts}]"
 
 class Return(ASTNode):
     def __init__(self, expression: ASTNode) -> None:
@@ -328,6 +338,10 @@ class Visitor(ABC):
 
     @abstractmethod
     def visit_break(self, node: Break) -> None:
+        pass
+
+    @abstractmethod
+    def visit_while_statement(self, node: WhileStatement) -> None:
         pass
 
     @abstractmethod
@@ -759,6 +773,38 @@ class IRGenerator(Visitor):
             raise SyntaxError("break solo puede usarse dentro de switch")
 
         self.builder.branch(self.break_blocks[-1])
+
+    def visit_while_statement(self, node: WhileStatement) -> None:
+        current_function = self.builder.function
+
+        condition_block = current_function.append_basic_block("while.cond")
+        body_block = current_function.append_basic_block("while.body")
+        end_block = current_function.append_basic_block("while.end")
+
+        # Saltar desde el bloque actual hacia la condición
+        self.builder.branch(condition_block)
+
+        # WHILE CONDITION
+        self.builder.position_at_end(condition_block)
+        node.condition.accept(self)
+
+        condition, condition_type = self.stack.pop()
+
+        if condition_type != "bool":
+            raise TypeError("La condición del while debe ser bool")
+
+        self.builder.cbranch(condition, body_block, end_block)
+
+        # WHILE BODY
+        self.builder.position_at_end(body_block)
+        node.stmts.accept(self)
+
+        # Si el cuerpo no terminó con return, vuelve a evaluar la condición
+        if not self.builder.block.is_terminated:
+            self.builder.branch(condition_block)
+
+        # CONTINUACIÓN
+        self.builder.position_at_end(end_block)
 
     def visit_return(self, node: Return) -> None:
         node.expression.accept(self)

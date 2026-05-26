@@ -9,7 +9,7 @@
 import ply.lex as lex
 import ply.yacc as yacc
 
-from arbol import Visitor, IRGenerator, Program, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break
+from arbol import Visitor, IRGenerator, Program, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break, WhileStatement
 from llvmlite import ir
 
 # %%
@@ -33,7 +33,8 @@ reserved = {
     'switch': 'SWITCH',
     'case': 'CASE',
     'default': 'DEFAULT',
-    'break': 'BREAK'
+    'break': 'BREAK',
+    'while': 'WHILE',
 }
 
 tokens = ['ID', 'INTLIT', 'DOUBLELIT', 'STRINGLIT', 'EQ', 'NE', 'LE', 'GE'] + list(reserved.values())
@@ -202,6 +203,7 @@ def p_Statement(p):
                 | IfStatement
                 | SwitchStatement
                 | Break
+                | WhileStatement
     """
     p[0] = p[1]
 
@@ -272,6 +274,12 @@ def p_Break(p):
     Break : BREAK ';'
     """
     p[0] = Break()
+
+def p_WhileStatement(p):
+    """
+    WhileStatement : WHILE '(' Condition ')' '{' Statements '}'
+    """
+    p[0] = WhileStatement(p[3], p[6])
 
 def p_Return(p):
     """
@@ -521,6 +529,7 @@ double main()
     */
 
     // CASE 2: SWITCH STATEMENT
+    /*
     switch (y) {
         case 1:
             z = 10;
@@ -532,6 +541,12 @@ double main()
 
         default:
             return 0;
+    }
+    */
+
+    // CASE 3: WHILE STATEMENT
+    while (x < 15) {
+        x = x + 1;
     }
 
     //END CASE
