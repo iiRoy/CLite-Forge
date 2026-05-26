@@ -5,12 +5,34 @@
 ================================================================
 """
 
+import importlib
+import arbol
+importlib.reload(arbol)
+
 # PLY sirve para construir analizadores léxicos y sintácticos en Python.
 import ply.lex as lex
 import ply.yacc as yacc
 
-from arbol import Visitor, IRGenerator, Program, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break, WhileStatement, DoWhileStatement, ForStatement
+from arbol import Visitor, IRGenerator, Program, Parameter, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break, WhileStatement, DoWhileStatement, ForStatement, LogicalOp
 from llvmlite import ir
+
+#%%
+"""
+================================================================ 
+                      F U N C T I O N S
+================================================================
+"""
+def get_llvm_type(type_name):
+    if type_name == "int":
+        return intType
+    elif type_name == "float":
+        return floatType
+    elif type_name == "string":
+        return stringType
+    elif type_name == "bool":
+        return boolType
+    else:
+        raise ValueError(f"Tipo desconocido: {type_name}")
 
 # %%
 """
@@ -21,7 +43,7 @@ from llvmlite import ir
 
 reserved = {
     'int': 'INT',
-    'double': 'DOUBLE',
+    'float': 'FLOAT',
     'string': 'STRING',
     'bool': 'BOOL',
     'true': 'TRUE',
@@ -39,7 +61,7 @@ reserved = {
     'for': 'FOR'
 }
 
-tokens = ['ID', 'INTLIT', 'DOUBLELIT', 'STRINGLIT', 'EQ', 'NE', 'LE', 'GE'] + list(reserved.values())
+tokens = ['ID', 'INTLIT', 'FLOATLIT', 'STRINGLIT', 'EQ', 'NE', 'LE', 'GE', 'AND', 'OR'] + list(reserved.values())
 t_ignore = ' \t'
 
 literals = '+-*/%(){},;=<>!:'
@@ -66,7 +88,7 @@ def t_ID(t):
 REGLA:
 Debe de ser número decimal positivo
 """
-def t_DOUBLELIT(t):
+def t_FLOATLIT(t):
     r'[0-9]+\.[0-9]+'
     t.value = float(t.value)
     return t
@@ -95,6 +117,8 @@ t_EQ = r'=='
 t_NE = r'!='
 t_LE = r'<='
 t_GE = r'>='
+t_AND = r'&&'
+t_OR  = r'\|\|'
 
 #Reconocimiento de saltos de lineas
 def t_newline(t):
@@ -132,9 +156,41 @@ def t_error(t):
 
 def p_Program(p):
     """
-    Program : Type ID '(' ')' '{' Declarations Statements '}'
+    Program : Type ID '(' Parameters ')' '{' Declarations Statements '}'
     """
-    p[0] = Program(p[1], p[2], p[6], p[7])
+    p[0] = Program(p[1], p[2], p[4], p[7], p[8])
+
+def p_Parameters(p):
+    """
+    Parameters : ParameterList
+               | empty
+    """
+    if p[1] is None:
+        p[0] = []
+    else:
+        p[0] = p[1]
+
+
+def p_ParameterList_one(p):
+    """
+    ParameterList : Parameter
+    """
+    p[0] = [p[1]]
+
+
+def p_ParameterList_many(p):
+    """
+    ParameterList : ParameterList ',' Parameter
+    """
+    p[1].append(p[3])
+    p[0] = p[1]
+
+
+def p_Parameter(p):
+    """
+    Parameter : Type ID
+    """
+    p[0] = Parameter(p[1], p[2])
 
 """
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
@@ -145,7 +201,7 @@ def p_Program(p):
 def p_Type(p):
     """
     Type : INT
-         | DOUBLE 
+         | FLOAT 
          | STRING
          | BOOL
     """
@@ -348,21 +404,49 @@ def p_Arguments_many(p):
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
 """
 
-def p_Condition_compare(p):
+def p_Condition_or(p):
     """
-    Condition : Expression '<' Expression
-              | Expression '>' Expression
-              | Expression EQ Expression
-              | Expression NE Expression
-              | Expression LE Expression
-              | Expression GE Expression
+    Condition : Condition OR Conjunction
+    """
+    p[0] = LogicalOp("||", p[1], p[3])
+
+
+def p_Condition_conjunction(p):
+    """
+    Condition : Conjunction
+    """
+    p[0] = p[1]
+
+
+def p_Conjunction_and(p):
+    """
+    Conjunction : Conjunction AND BoolFactor
+    """
+    p[0] = LogicalOp("&&", p[1], p[3])
+
+
+def p_Conjunction_bool_factor(p):
+    """
+    Conjunction : BoolFactor
+    """
+    p[0] = p[1]
+
+
+def p_BoolFactor_compare(p):
+    """
+    BoolFactor : Expression '<' Expression
+               | Expression '>' Expression
+               | Expression EQ Expression
+               | Expression NE Expression
+               | Expression LE Expression
+               | Expression GE Expression
     """
     p[0] = CompareOp(p[2], p[1], p[3])
 
 
-def p_Condition_bool(p):
+def p_BoolFactor_expression(p):
     """
-    Condition : Expression
+    BoolFactor : Expression
     """
     p[0] = p[1]
 
@@ -408,11 +492,11 @@ def p_Factor_int(p):
     p[0] = Literal(p[1], "INT")
 
 
-def p_Factor_double(p):
+def p_Factor_float(p):
     """
-    Factor : DOUBLELIT
+    Factor : FLOATLIT
     """
-    p[0] = Literal(p[1], "DOUBLE")
+    p[0] = Literal(p[1], "FLOAT")
 
 
 def p_Factor_string(p):
@@ -433,6 +517,12 @@ def p_Factor_not(p):
     Factor : '!' Factor
     """
     p[0] = UnaryOp('!', p[2])
+
+def p_Factor_unary_minus(p):
+    """
+    Factor : '-' Factor
+    """
+    p[0] = UnaryOp("-", p[2])
 
 def p_Factor_variable(p):
     """
@@ -546,18 +636,19 @@ Declarations([
 """
 
 data = """
-double main()
+float main()
 {
     // MAIN DECLARATIONS
-    double x = 10 - 0.5;
+    float x = 10 - 0.5;
     int y = 2;
-    double z;
+    float z;
 
     // CASE 1: IF STATEMENT
     /*
     bool a = TRUE;
+    bool b = FALSE;
 
-    if (true == !a) {
+    if (true == a && false != b) {
         z = x + y;
     } else {
         return 0;
@@ -565,10 +656,10 @@ double main()
     */
 
     // CASE 2: SWITCH STATEMENT
-    /*
+    
     switch (y) {
         case 1:
-            z = 10;
+            z = -10;
             return 1;
 
         case 2:
@@ -578,7 +669,7 @@ double main()
         default:
             return 0;
     }
-    */
+    
 
     // CASE 3: WHILE STATEMENT
     /*
@@ -595,11 +686,12 @@ double main()
     */
 
     // CASE 5: FOR WHILE STATEMENT
-
+    /*
     int i;
     for (i = 0; i < 5; i = i + 1) {
         x = x + i;
     }
+    */
 
     //END CASE
     printf("z = %i\n", z);
@@ -615,14 +707,14 @@ if tree is None:
 
 # Configuración inicial LLVM IR:
 intType = ir.IntType(32)
-doubleType = ir.DoubleType()
+floatType = ir.FloatType()
 stringType = ir.IntType(8).as_pointer()
 boolType = ir.IntType(1)
 
 if tree.return_type == "int":
     returnType = intType
-elif tree.return_type == "double":
-    returnType = doubleType
+elif tree.return_type == "float":
+    returnType = floatType
 elif tree.return_type == "string":
     returnType = stringType
 elif tree.return_type == "bool":
@@ -632,15 +724,23 @@ else:
 
 module = ir.Module(name="prog")
 
-fnty = ir.FunctionType(returnType, [])
+param_types = []
+
+for param in tree.params:
+    param_types.append(get_llvm_type(param.var_type))
+
+fnty = ir.FunctionType(returnType, param_types)
 func = ir.Function(module, fnty, name=tree.name)
+
+for llvm_arg, param in zip(func.args, tree.params):
+    llvm_arg.name = param.name
 
 block = func.append_basic_block(name="entry")
 builder = ir.IRBuilder(block)
 
 print(tree)
 
-irgen = IRGenerator(builder, intType, doubleType, stringType, boolType, module, tree.return_type)
+irgen = IRGenerator(builder, intType, floatType, stringType, boolType, module, tree.return_type)
 tree.accept(irgen)
 
 if not builder.block.is_terminated:
@@ -648,3 +748,21 @@ if not builder.block.is_terminated:
 
 print(module)
 # %%
+
+"""
+Prioridad alta:
+3. function parameters
+4. function calls generales
+5. funciones además de main
+
+Prioridad media:
+6. char
+7. float
+8. bloques como statement
+9. empty statement ;
+
+Prioridad avanzada:
+10. arrays
+11. global variables
+12. declaraciones múltiples con coma
+"""

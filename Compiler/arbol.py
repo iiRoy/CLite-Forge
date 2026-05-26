@@ -65,14 +65,26 @@ class ASTNode(ABC):
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
 """
 class Program(ASTNode):
-    def __init__(self, return_type: str, name: str, decls: Any, stmts: ASTNode) -> None:
+    def __init__(self, return_type: str, name: str, params: list[Parameter], decls: Any, stmts: ASTNode) -> None:
         self.return_type = return_type
         self.name = name
+        self.params = params
         self.decls = decls
         self.stmts = stmts
 
     def accept(self, visitor: Visitor):
         visitor.visit_program(self)
+
+    def __str__(self):
+        return f"[PROGRAM, {self.return_type}, {self.name}, {self.params}, {self.decls}, {self.stmts}]"
+
+class Parameter:
+    def __init__(self, var_type: str, name: str) -> None:
+        self.var_type = var_type
+        self.name = name
+
+    def __str__(self):
+        return f"[PARAM, {self.var_type}, {self.name}]"
 
 """
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
@@ -286,6 +298,18 @@ class Literal(ASTNode):
     def __str__(self):
         return f"[LIT, {self.value}]"
 
+class LogicalOp(ASTNode):
+    def __init__(self, op: str, lhs: ASTNode, rhs: ASTNode) -> None:
+        self.op = op
+        self.lhs = lhs
+        self.rhs = rhs
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_logical_op(self)
+
+    def __str__(self):
+        return f"[LOGIC, {self.op}, {self.lhs}, {self.rhs}]"
+
 class Variable(ASTNode):
     def __init__(self, name: Any, type: str) -> None:
         self.name = name
@@ -377,11 +401,15 @@ class Visitor(ABC):
         pass
 
     @abstractmethod
+    def visit_logical_op(self, node: LogicalOp) -> None:
+        pass
+
+    @abstractmethod
     def visit_return(self, node: Return) -> None:
         pass
 
 class IRGenerator(Visitor):
-    def __init__(self, builder, intType, doubleType, stringType, boolType, module, return_type):
+    def __init__(self, builder, intType, floatType, stringType, boolType, module, return_type):
         # Pila temporal donde el IRGenerator guarda resultados mientras evalúa expresiones.
         # La pila guarda tuplas
         self.stack = []
@@ -391,7 +419,7 @@ class IRGenerator(Visitor):
         """
         self.symbol_table = {
             "x": (ptr_x, "int"),
-            "y": (ptr_y, "double")
+            "y": (ptr_y, "float")
         }
         """
         # ptr_x y ptr_y son direcciones de memoria generadas con alloca.
@@ -402,7 +430,7 @@ class IRGenerator(Visitor):
 
         # Tipos de datos para el LLVM
         self.intType = intType
-        self.doubleType = doubleType
+        self.floatType = floatType
         self.stringType = stringType
         self.boolType = ir.IntType(1)
 
@@ -452,14 +480,26 @@ class IRGenerator(Visitor):
 
         return self.builder.bitcast(global_string, self.stringType)
 
+    def get_llvm_type(self, type_name):
+        if type_name == "int":
+            return self.intType
+        elif type_name == "float":
+            return self.floatType
+        elif type_name == "string":
+            return self.stringType
+        elif type_name == "bool":
+            return self.boolType
+        else:
+            raise ValueError(f"Tipo desconocido: {type_name}")
+
     def visit_literal(self, node: Literal) -> None:
         if node.type == "INT":
             value = ir.Constant(self.intType, node.value)
             self.stack.append((value, "int"))
 
-        elif node.type == "DOUBLE":
-            value = ir.Constant(self.doubleType, node.value)
-            self.stack.append((value, "double"))
+        elif node.type == "FLOAT":
+            value = ir.Constant(self.floatType, node.value)
+            self.stack.append((value, "float"))
         
         elif node.type == "STRING":
             value = self.create_global_string(node.value)
@@ -470,8 +510,21 @@ class IRGenerator(Visitor):
             self.stack.append((value, "bool"))
 
     def visit_program(self, node: Program) -> None:
+        self.visit_parameters(node.params)
         node.decls.accept(self)
         node.stmts.accept(self)
+
+    def visit_parameters(self, params):
+        for param, llvm_arg in zip(params, self.builder.function.args):
+            llvm_arg.name = param.name
+
+            llvm_type = self.get_llvm_type(param.var_type)
+            var_type = param.var_type
+
+            ptr = self.builder.alloca(llvm_type, name=param.name)
+            self.builder.store(llvm_arg, ptr)
+
+            self.symbol_table[param.name] = (ptr, var_type)
 
     def visit_declarations(self, node: Declarations) -> None:
         for declaration in node.declarations:
@@ -481,9 +534,9 @@ class IRGenerator(Visitor):
         if node.var_type == "int":
             llvm_type = self.intType
             var_type = "int"
-        elif node.var_type == "double":
-            llvm_type = self.doubleType
-            var_type = "double"
+        elif node.var_type == "float":
+            llvm_type = self.floatType
+            var_type = "float"
         elif node.var_type == "string":
             llvm_type = self.stringType
             var_type = "string"
@@ -492,6 +545,9 @@ class IRGenerator(Visitor):
             var_type = "bool"
         else:
             raise ValueError(f"Tipo desconocido: {node.var_type}")
+
+        if node.name in self.symbol_table:
+            raise NameError(f"La variable '{node.name}' ya fue declarada")
 
         #Reserva espacio en memoria para la variable.
         ptr = self.builder.alloca(llvm_type, name=node.name)
@@ -515,9 +571,9 @@ class IRGenerator(Visitor):
             #Extrae los últimos elementos de la pila
             value, value_type = self.stack.pop()
 
-            if var_type == "double" and value_type == "int":
-                value = self.builder.sitofp(value, self.doubleType)
-                value_type = "double"
+            if var_type == "float" and value_type == "int":
+                value = self.builder.sitofp(value, self.floatType)
+                value_type = "float"
 
             elif var_type != value_type:
                 raise TypeError(f"No se puede asignar '{value_type}' a '{var_type}'")
@@ -528,8 +584,8 @@ class IRGenerator(Visitor):
             if var_type == "int":
                 default_value = ir.Constant(self.intType, 0)
                 self.builder.store(default_value, ptr)
-            elif var_type == "double":
-                default_value = ir.Constant(self.doubleType, 0.0)
+            elif var_type == "float":
+                default_value = ir.Constant(self.floatType, 0.0)
                 self.builder.store(default_value, ptr)
             elif var_type == "string":
                 default_value = ir.Constant(self.stringType, None)
@@ -566,12 +622,12 @@ class IRGenerator(Visitor):
 
         ptr, var_type = self.symbol_table[node.variable]
 
-        if var_type == "double" and value_type == "int":
-            value = self.builder.sitofp(value, self.doubleType)
-            value_type = "double"
+        if var_type == "float" and value_type == "int":
+            value = self.builder.sitofp(value, self.floatType)
+            value_type = "float"
 
-        elif var_type == "int" and value_type == "double":
-            raise TypeError("No se puede asignar 'DOUBLE' a 'INT' sin conversión explícita")
+        elif var_type == "int" and value_type == "float":
+            raise TypeError("No se puede asignar 'FLOAT' a 'INT' sin conversión explícita")
 
         elif var_type != value_type:
             raise TypeError(f"No se puede asignar '{value_type}' a '{var_type}'")
@@ -590,14 +646,14 @@ class IRGenerator(Visitor):
         if lhs_type in invalid_types or rhs_type in invalid_types:
             raise TypeError(f"No se puede usar el operador {node.op} con {lhs_type} y {rhs_type}")
 
-        if lhs_type == "double" or rhs_type == "double":
+        if lhs_type == "float" or rhs_type == "float":
             if lhs_type == "int":
                 # Signed integer to floating point
-                lhs = self.builder.sitofp(lhs, self.doubleType)
+                lhs = self.builder.sitofp(lhs, self.floatType)
 
             if rhs_type == "int":
                 # Signed integer to floating point
-                rhs = self.builder.sitofp(rhs, self.doubleType)
+                rhs = self.builder.sitofp(rhs, self.floatType)
 
             if node.op == "+":
                 result = self.builder.fadd(lhs, rhs)
@@ -608,9 +664,9 @@ class IRGenerator(Visitor):
             elif node.op == "/":
                 result = self.builder.fdiv(lhs, rhs)
             else:
-                raise ValueError(f"Operador no válido para double: {node.op}")
+                raise ValueError(f"Operador no válido para float: {node.op}")
 
-            self.stack.append((result, "double"))
+            self.stack.append((result, "float"))
 
         else:
             if node.op == "+":
@@ -646,12 +702,12 @@ class IRGenerator(Visitor):
             self.stack.append((result, "bool"))
             return
 
-        if lhs_type == "double" or rhs_type == "double":
+        if lhs_type == "float" or rhs_type == "float":
             if lhs_type == "int":
-                lhs = self.builder.sitofp(lhs, self.doubleType)
+                lhs = self.builder.sitofp(lhs, self.floatType)
 
             if rhs_type == "int":
-                rhs = self.builder.sitofp(rhs, self.doubleType)
+                rhs = self.builder.sitofp(rhs, self.floatType)
 
             result = self.builder.fcmp_ordered(node.op, lhs, rhs)
             self.stack.append((result, "bool"))
@@ -672,9 +728,23 @@ class IRGenerator(Visitor):
             result = self.builder.not_(value)
             self.stack.append((result, "bool"))
 
+        elif node.op == "-":
+            if value_type == "int":
+                zero = ir.Constant(self.intType, 0)
+                result = self.builder.sub(zero, value)
+                self.stack.append((result, "int"))
+
+            elif value_type == "float":
+                zero = ir.Constant(self.floatType, 0.0)
+                result = self.builder.fsub(zero, value)
+                self.stack.append((result, "float"))
+
+            else:
+                raise TypeError(f"El operador - no se puede usar con {value_type}")
+
         else:
             raise ValueError(f"Operador unario desconocido: {node.op}")
-
+            
     def visit_print(self, node: Print) -> None:
         if len(node.args) == 0:
             raise TypeError("printf necesita al menos un argumento")
@@ -913,14 +983,37 @@ class IRGenerator(Visitor):
         # 5. END
         self.builder.position_at_end(end_block)
 
+    def visit_logical_op(self, node: LogicalOp) -> None:
+        node.lhs.accept(self)
+        node.rhs.accept(self)
+
+        rhs, rhs_type = self.stack.pop()
+        lhs, lhs_type = self.stack.pop()
+
+        if lhs_type != "bool" or rhs_type != "bool":
+            raise TypeError(
+                f"El operador {node.op} solo puede usarse con booleanos, no con {lhs_type} y {rhs_type}"
+            )
+
+        if node.op == "&&":
+            result = self.builder.and_(lhs, rhs)
+
+        elif node.op == "||":
+            result = self.builder.or_(lhs, rhs)
+
+        else:
+            raise ValueError(f"Operador lógico desconocido: {node.op}")
+
+        self.stack.append((result, "bool"))
+
     def visit_return(self, node: Return) -> None:
         node.expression.accept(self)
 
         value, value_type = self.stack.pop()
 
-        if self.return_type == "double" and value_type == "int":
-            value = self.builder.sitofp(value, self.doubleType)
-            value_type = "double"
+        if self.return_type == "float" and value_type == "int":
+            value = self.builder.sitofp(value, self.floatType)
+            value_type = "float"
 
         elif self.return_type != value_type:
             raise TypeError(f"No se puede retornar '{value_type}' desde una función '{self.return_type}'")
