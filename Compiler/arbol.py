@@ -65,14 +65,24 @@ class ASTNode(ABC):
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
 """
 class Program(ASTNode):
-    def __init__(self, functions: list[FunctionDefinition]) -> None:
-        self.functions = functions
+    def __init__(self, items: list[ASTNode]) -> None:
+        self.items = items
+        self.functions = []
+        self.globals = []
+
+        for item in items:
+            if isinstance(item, FunctionDefinition):
+                self.functions.append(item)
+            elif isinstance(item, GlobalDeclaration):
+                self.globals.append(item)
+            else:
+                raise TypeError(f"Elemento desconocido en Program: {item}")
 
     def accept(self, visitor: Visitor):
         visitor.visit_program(self)
 
     def __str__(self):
-        return f"[PROGRAM, {self.functions}]"
+        return f"[PROGRAM, globals={self.globals}, functions={self.functions}]"
 
 class FunctionDefinition(ASTNode):
     def __init__(self, return_type: str, name: str, params: list[Parameter], decls: Any, stmts: ASTNode) -> None:
@@ -123,6 +133,16 @@ class Declarations(ASTNode):
 
     def __str__(self):
         return f"[DECLS, {self.declarations}]"
+
+class GlobalDeclaration(ASTNode):
+    def __init__(self, declarations: list[Declaration]) -> None:
+        self.declarations = declarations
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_global_declaration(self)
+
+    def __str__(self):
+        return f"[GLOBAL_DECL, {self.declarations}]"
 
 """
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌

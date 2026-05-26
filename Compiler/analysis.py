@@ -13,7 +13,7 @@ importlib.reload(arbol)
 import ply.lex as lex
 import ply.yacc as yacc
 
-from arbol import Visitor, IRGenerator, Program, FunctionDefinition, Parameter, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break, WhileStatement, DoWhileStatement, ForStatement, LogicalOp, Call, CallStatement, BlockStatement, EmptyStatement, ArrayAccess
+from arbol import Visitor, IRGenerator, Program, FunctionDefinition, Parameter, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break, WhileStatement, DoWhileStatement, ForStatement, LogicalOp, Call, CallStatement, BlockStatement, EmptyStatement, ArrayAccess, GlobalDeclaration
 from llvmlite import ir
 
 #%%
@@ -71,6 +71,11 @@ tokens = ['ID', 'INTLIT', 'FLOATLIT', 'STRINGLIT', 'CHARLIT', 'EQ', 'NE', 'LE', 
 t_ignore = ' \t'
 
 literals = '+-*/%(){}[],;=<>!:'
+
+precedence = (
+    ('nonassoc', 'IFX'),
+    ('nonassoc', 'ELSE'),
+)
 
 #Reconocimiento de nombres
 """
@@ -178,40 +183,124 @@ def t_error(t):
 
 def p_Program(p):
     """
-    Program : FunctionList
+    Program : ProgramItems
     """
     p[0] = Program(p[1])
 
-def p_FunctionList_one(p):
+
+def p_ProgramItems_one(p):
     """
-    FunctionList : FunctionDefinition
+    ProgramItems : ProgramItem
     """
     p[0] = [p[1]]
 
 
-def p_FunctionList_many(p):
+def p_ProgramItems_many(p):
     """
-    FunctionList : FunctionList FunctionDefinition
+    ProgramItems : ProgramItems ProgramItem
     """
     p[1].append(p[2])
     p[0] = p[1]
 
-def p_FunctionDefinition(p):
+
+def p_ProgramItem_typed(p):
     """
-    FunctionDefinition : ReturnType ID '(' Parameters ')' BlockStatement
+    ProgramItem : Type ID ProgramItemTail
     """
-    p[0] = FunctionDefinition(p[1], p[2], p[4], p[6].decls, p[6].stmts)
+    if p[3][0] == "function":
+        params = p[3][1]
+        block = p[3][2]
+
+        p[0] = FunctionDefinition(
+            p[1],
+            p[2],
+            params,
+            block.decls,
+            block.stmts
+        )
+
+    else:
+        first_array_size = p[3][1]
+        rest_decls = p[3][2]
+
+        first_decl = Declaration(
+            p[1],
+            p[2],
+            array_size=first_array_size
+        )
+
+        for decl in rest_decls:
+            decl.var_type = p[1]
+
+        p[0] = GlobalDeclaration([first_decl] + rest_decls)
+
+
+def p_ProgramItem_void_function(p):
+    """
+    ProgramItem : VOID ID '(' Parameters ')' BlockStatement
+    """
+    p[0] = FunctionDefinition(
+        p[1],
+        p[2],
+        p[4],
+        p[6].decls,
+        p[6].stmts
+    )
+
+
+def p_ProgramItemTail_function(p):
+    """
+    ProgramItemTail : '(' Parameters ')' BlockStatement
+    """
+    p[0] = ("function", p[2], p[4])
+
+
+def p_ProgramItemTail_global(p):
+    """
+    ProgramItemTail : DeclaratorSuffix GlobalDeclaratorTail ';'
+    """
+    p[0] = ("global", p[1], p[2])
+
+
+def p_DeclaratorSuffix_array(p):
+    """
+    DeclaratorSuffix : '[' INTLIT ']'
+    """
+    p[0] = p[2]
+
+
+def p_DeclaratorSuffix_empty(p):
+    """
+    DeclaratorSuffix : empty
+    """
+    p[0] = None
+
+
+def p_GlobalDeclaratorTail_many(p):
+    """
+    GlobalDeclaratorTail : ',' Declarator GlobalDeclaratorTail
+    """
+    p[0] = [p[2]] + p[3]
+
+
+def p_GlobalDeclaratorTail_empty(p):
+    """
+    GlobalDeclaratorTail : empty
+    """
+    p[0] = []
 
 def p_Parameters(p):
     """
     Parameters : ParameterList
+               | VOID
                | empty
     """
     if p[1] is None:
         p[0] = []
+    elif p[1] == "void":
+        p[0] = []
     else:
         p[0] = p[1]
-
 
 def p_ParameterList_one(p):
     """
@@ -250,13 +339,6 @@ def p_Type(p):
     """
     p[0] = p[1]
 
-def p_ReturnType(p):
-    """
-    ReturnType : Type
-               | VOID
-    """
-    p[0] = p[1]
-
 """
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
                  D e c l a r a t i o n s
@@ -271,24 +353,50 @@ def p_Declarations(p):
     if len(p) == 2:
         p[0] = Declarations([])
     else:
-        p[1].declarations.append(p[2])
+        p[1].declarations.extend(p[2])
         p[0] = p[1]
 #VER NOTA 1
 
 def p_Declaration(p):
     """
-    Declaration : Type ID ';'
+    Declaration : Type DeclaratorList ';'
                 | Type ID '=' Expression ';'
-                | Type ID '[' INTLIT ']' ';'
     """
     if len(p) == 4:
-        p[0] = Declaration(p[1], p[2])
-
-    elif len(p) == 6:
-        p[0] = Declaration(p[1], p[2], p[4])
-
+        p[0] = p[2]
+        for decl in p[0]:
+            decl.var_type = p[1]
     else:
-        p[0] = Declaration(p[1], p[2], array_size=p[4])
+        p[0] = [Declaration(p[1], p[2], p[4])]
+
+
+def p_DeclaratorList_one(p):
+    """
+    DeclaratorList : Declarator
+    """
+    p[0] = [p[1]]
+
+
+def p_DeclaratorList_many(p):
+    """
+    DeclaratorList : DeclaratorList ',' Declarator
+    """
+    p[1].append(p[3])
+    p[0] = p[1]
+
+
+def p_Declarator_variable(p):
+    """
+    Declarator : ID
+    """
+    p[0] = Declaration(None, p[1])
+
+
+def p_Declarator_array(p):
+    """
+    Declarator : ID '[' INTLIT ']'
+    """
+    p[0] = Declaration(None, p[1], array_size=p[3])
 
 """
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
@@ -345,15 +453,16 @@ def p_Assignment(p):
 
 def p_IfStatement_if(p):
     """
-    IfStatement : IF '(' Condition ')' BlockStatement
+    IfStatement : IF '(' Expression ')' Statement %prec IFX
     """
-    p[0] = IfStatement(p[3], p[5], None)
+    p[0] = IfStatement(p[3], Statements([p[5]]), None)
+
 
 def p_IfStatement_if_else(p):
     """
-    IfStatement : IF '(' Condition ')' BlockStatement ELSE BlockStatement
+    IfStatement : IF '(' Expression ')' Statement ELSE Statement
     """
-    p[0] = IfStatement(p[3], p[5], p[7])
+    p[0] = IfStatement(p[3], Statements([p[5]]), Statements([p[7]]))
 
 def p_Print(p):
     """
@@ -402,19 +511,19 @@ def p_Break(p):
 
 def p_WhileStatement(p):
     """
-    WhileStatement : WHILE '(' Condition ')' BlockStatement
+    WhileStatement : WHILE '(' Expression ')' Statement
     """
-    p[0] = WhileStatement(p[3], p[5])
+    p[0] = WhileStatement(p[3], Statements([p[5]]))
 
 def p_DoWhileStatement(p):
     """
-    DoWhileStatement : DO BlockStatement WHILE '(' Condition ')' ';'
+    DoWhileStatement : DO BlockStatement WHILE '(' Expression ')' ';'
     """
     p[0] = DoWhileStatement(p[2], p[5])
 
 def p_ForStatement(p):
     """
-    ForStatement : FOR '(' ForInit ';' Condition ';' ForUpdate ')' BlockStatement
+    ForStatement : FOR '(' ForInit ';' Expression ';' ForUpdate ')' BlockStatement
     """
     p[0] = ForStatement(p[3], p[5], p[7], p[9])
 
@@ -492,63 +601,17 @@ def p_OptionalArguments(p):
     else:
         p[0] = p[1]
 
+def p_Call(p):
+    """
+    Call : ID '(' OptionalArguments ')'
+    """
+    p[0] = Call(p[1], p[3])
+
 def p_ArrayAccess(p):
     """
     ArrayAccess : ID '[' Expression ']'
     """
     p[0] = ArrayAccess(p[1], p[3])
-
-"""
-▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
-                  C o n d i t i o n s
-▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
-"""
-
-def p_Condition_or(p):
-    """
-    Condition : Condition OR Conjunction
-    """
-    p[0] = LogicalOp("||", p[1], p[3])
-
-
-def p_Condition_conjunction(p):
-    """
-    Condition : Conjunction
-    """
-    p[0] = p[1]
-
-
-def p_Conjunction_and(p):
-    """
-    Conjunction : Conjunction AND BoolFactor
-    """
-    p[0] = LogicalOp("&&", p[1], p[3])
-
-
-def p_Conjunction_bool_factor(p):
-    """
-    Conjunction : BoolFactor
-    """
-    p[0] = p[1]
-
-
-def p_BoolFactor_compare(p):
-    """
-    BoolFactor : Expression '<' Expression
-               | Expression '>' Expression
-               | Expression EQ Expression
-               | Expression NE Expression
-               | Expression LE Expression
-               | Expression GE Expression
-    """
-    p[0] = CompareOp(p[2], p[1], p[3])
-
-
-def p_BoolFactor_expression(p):
-    """
-    BoolFactor : Expression
-    """
-    p[0] = p[1]
 
 """
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
@@ -558,14 +621,13 @@ def p_BoolFactor_expression(p):
 
 def p_Expression(p):
     """
-    Expression : Expression '+' Term
-               | Expression '-' Term
-               | Term
+    Expression : Expression OR Conjunction
+               | Conjunction
     """
     if len(p) == 2:
         p[0] = p[1]
     else:
-        p[0] = BinaryOp(p[2], p[1], p[3])
+        p[0] = LogicalOp("||", p[1], p[3])
 
 def p_Term(p):
     """
@@ -581,81 +643,151 @@ def p_Term(p):
 
 """
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
-                     F a c t o r s
+                  C o n d i t i o n s
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
 """
 
-def p_Factor_int(p):
+def p_Conjunction(p):
     """
-    Factor : INTLIT
+    Conjunction : Conjunction AND Equality
+                | Equality
+    """
+    if len(p) == 2:
+        p[0] = p[1]
+    else:
+        p[0] = LogicalOp("&&", p[1], p[3])
+
+
+def p_Equality(p):
+    """
+    Equality : Relation EQ Relation
+             | Relation NE Relation
+             | Relation
+    """
+    if len(p) == 2:
+        p[0] = p[1]
+    else:
+        p[0] = CompareOp(p[2], p[1], p[3])
+
+
+def p_Relation(p):
+    """
+    Relation : Addition '<' Addition
+             | Addition '>' Addition
+             | Addition LE Addition
+             | Addition GE Addition
+             | Addition
+    """
+    if len(p) == 2:
+        p[0] = p[1]
+    else:
+        p[0] = CompareOp(p[2], p[1], p[3])
+
+
+def p_Addition(p):
+    """
+    Addition : Addition '+' Term
+             | Addition '-' Term
+             | Term
+    """
+    if len(p) == 2:
+        p[0] = p[1]
+    else:
+        p[0] = BinaryOp(p[2], p[1], p[3])
+
+"""
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+                    L i t e r a l s
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+"""
+def p_Literal_int(p):
+    """
+    Literal : INTLIT
     """
     p[0] = Literal(p[1], "INT")
 
-def p_Factor_float(p):
+def p_Literal_float(p):
     """
-    Factor : FLOATLIT
+    Literal : FLOATLIT
     """
     p[0] = Literal(p[1], "FLOAT")
 
-def p_Factor_string(p):
+def p_Literal_string(p):
     """
-    Factor : STRINGLIT
+    Literal : STRINGLIT
     """
     p[0] = Literal(p[1], "STRING")
 
-def p_Factor_bool(p):
+def p_Literal_bool(p):
     """
-    Factor : TRUE
+    Literal : TRUE
            | FALSE
     """
     p[0] = Literal(p[1], "BOOL")
 
-def p_Factor_char(p):
+def p_Literal_char(p):
     """
-    Factor : CHARLIT
+    Literal : CHARLIT
     """
     p[0] = Literal(p[1], "CHAR")
 
-def p_Factor_not(p):
+"""
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+                     F a c t o r s
+▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
+"""
+def p_Factor_primary(p):
     """
-    Factor : '!' Factor
+    Factor : Primary
     """
-    p[0] = UnaryOp('!', p[2])
+    p[0] = p[1]
+
 
 def p_Factor_unary_minus(p):
     """
-    Factor : '-' Factor
+    Factor : '-' Primary
     """
     p[0] = UnaryOp("-", p[2])
 
-def p_Factor_variable(p):
+
+def p_Factor_not(p):
     """
-    Factor : ID
+    Factor : '!' Primary
+    """
+    p[0] = UnaryOp("!", p[2])
+
+
+def p_Primary_variable(p):
+    """
+    Primary : ID
     """
     p[0] = Variable(p[1], None)
 
 
-def p_Factor_group(p):
+def p_Primary_array_access(p):
     """
-    Factor : '(' Expression ')'
-    """
-    p[0] = p[2]
-
-def p_Call(p):
-    """
-    Call : ID '(' OptionalArguments ')'
-    """
-    p[0] = Call(p[1], p[3])
-
-def p_Factor_call(p):
-    """
-    Factor : Call
+    Primary : ArrayAccess
     """
     p[0] = p[1]
 
-def p_Factor_array_access(p):
+
+def p_Primary_literal(p):
     """
-    Factor : ArrayAccess
+    Primary : Literal
+    """
+    p[0] = p[1]
+
+
+def p_Primary_group(p):
+    """
+    Primary : '(' Expression ')'
+    """
+    p[0] = p[2]
+
+
+def p_Primary_call(p):
+    """
+    Primary : Call
     """
     p[0] = p[1]
 
@@ -758,18 +890,81 @@ Declarations([
 """
 
 data = """
+int globalCounter, globalArray[3];
+
+int inc(int x)
+{
+    return x + 1;
+}
+
+float mix(int a, float b)
+{
+    return a + b;
+}
+
+bool isValid(int value, char marker)
+{
+    return value >= 0 && value != 3 || marker == 'A';
+}
+
+void touch(void)
+{
+    ;
+    return;
+}
+
 int main()
 {
-    int arr[5];
-    int i;
+    int i, total, arr[5];
+    float f;
+    bool flag;
+    char letter;
 
+    total = 0;
     i = 0;
+    letter = 'A';
 
-    arr[0] = 10;
-    arr[1] = 20;
-    arr[2] = arr[0] + arr[1];
+    touch();
 
-    return arr[2];
+    for (i = 0; i < 5; i = i + 1) {
+        arr[i] = inc(i);
+        total = total + arr[i];
+    }
+
+    f = mix(total, 2.5);
+
+    flag = isValid(total, letter);
+
+    if (flag)
+        total = total + 1;
+    else
+        total = total - 1;
+
+    while (total < 20)
+        total = total + 2;
+
+    do {
+        total = total - 1;
+    } while (total > 18);
+
+    switch (total) {
+        case 17:
+            total = total + 100;
+            break;
+        case 18:
+            total = total + 200;
+            break;
+        default:
+            total = total + 300;
+    }
+
+    if (!(total == 218) || -1 > 0) {
+        total = total + 1;
+    } else {
+        total = total + 2;
+    }
+
+    return total;
 }
 """
 
