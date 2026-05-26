@@ -65,6 +65,16 @@ class ASTNode(ABC):
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
 """
 class Program(ASTNode):
+    def __init__(self, functions: list[FunctionDefinition]) -> None:
+        self.functions = functions
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_program(self)
+
+    def __str__(self):
+        return f"[PROGRAM, {self.functions}]"
+
+class FunctionDefinition(ASTNode):
     def __init__(self, return_type: str, name: str, params: list[Parameter], decls: Any, stmts: ASTNode) -> None:
         self.return_type = return_type
         self.name = name
@@ -73,10 +83,10 @@ class Program(ASTNode):
         self.stmts = stmts
 
     def accept(self, visitor: Visitor):
-        visitor.visit_program(self)
+        visitor.visit_function_definition(self)
 
     def __str__(self):
-        return f"[PROGRAM, {self.return_type}, {self.name}, {self.params}, {self.decls}, {self.stmts}]"
+        return f"[FUNCTION, {self.return_type}, {self.name}, {self.params}, {self.decls}, {self.stmts}]"
 
 class Parameter:
     def __init__(self, var_type: str, name: str) -> None:
@@ -434,6 +444,10 @@ class Visitor(ABC):
         pass
 
     @abstractmethod
+    def visit_function_definition(self, node: FunctionDefinition) -> None:
+        pass
+
+    @abstractmethod
     def visit_return(self, node: Return) -> None:
         pass
 
@@ -487,11 +501,14 @@ class IRGenerator(Visitor):
             var_arg=True
         )
 
-        self.printf = ir.Function(
-            self.module,
-            printf_type,
-            name="printf"
-        )
+        if "printf" in self.module.globals:
+            self.printf = self.module.globals["printf"]
+        else:
+            self.printf = ir.Function(
+                self.module,
+                printf_type,
+                name="printf"
+            )
     
     def create_global_string(self, text: str):
         text = text + "\0"
@@ -558,9 +575,7 @@ class IRGenerator(Visitor):
             self.stack.append((value, "bool"))
 
     def visit_program(self, node: Program) -> None:
-        self.visit_parameters(node.params)
-        node.decls.accept(self)
-        node.stmts.accept(self)
+        raise RuntimeError("No uses tree.accept(irgen) para múltiples funciones. Genera cada función en analysis.py.")
 
     def visit_parameters(self, params):
         for param, llvm_arg in zip(params, self.builder.function.args):
@@ -1087,6 +1102,11 @@ class IRGenerator(Visitor):
 
         if len(self.stack) > before:
             self.stack.pop()
+    
+    def visit_function_definition(self, node: FunctionDefinition) -> None:
+        self.visit_parameters(node.params)
+        node.decls.accept(self)
+        node.stmts.accept(self)
 
     def visit_return(self, node: Return) -> None:
         node.expression.accept(self)

@@ -13,7 +13,7 @@ importlib.reload(arbol)
 import ply.lex as lex
 import ply.yacc as yacc
 
-from arbol import Visitor, IRGenerator, Program, Parameter, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break, WhileStatement, DoWhileStatement, ForStatement, LogicalOp, Call, CallStatement
+from arbol import Visitor, IRGenerator, Program, FunctionDefinition, Parameter, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break, WhileStatement, DoWhileStatement, ForStatement, LogicalOp, Call, CallStatement
 from llvmlite import ir
 
 #%%
@@ -156,9 +156,29 @@ def t_error(t):
 
 def p_Program(p):
     """
-    Program : Type ID '(' Parameters ')' '{' Declarations Statements '}'
+    Program : FunctionList
     """
-    p[0] = Program(p[1], p[2], p[4], p[7], p[8])
+    p[0] = Program(p[1])
+
+def p_FunctionList_one(p):
+    """
+    FunctionList : FunctionDefinition
+    """
+    p[0] = [p[1]]
+
+
+def p_FunctionList_many(p):
+    """
+    FunctionList : FunctionList FunctionDefinition
+    """
+    p[1].append(p[2])
+    p[0] = p[1]
+
+def p_FunctionDefinition(p):
+    """
+    FunctionDefinition : Type ID '(' Parameters ')' '{' Declarations Statements '}'
+    """
+    p[0] = FunctionDefinition(p[1], p[2], p[4], p[7], p[8])
 
 def p_Parameters(p):
     """
@@ -673,7 +693,14 @@ int factorial(int n)
 
     return n * factorial(n - 1);
 }
+
+int main()
+{
+    int result = factorial(5);
+    return result;
+}
 """
+
 lexer = lex.lex()
 parser = yacc.yacc()
 tree = parser.parse(data, lexer=lexer)
@@ -681,69 +708,74 @@ tree = parser.parse(data, lexer=lexer)
 if tree is None:
     raise SyntaxError("El parser no pudo construir el AST.")
 
+
 # Configuración inicial LLVM IR:
 intType = ir.IntType(32)
 floatType = ir.FloatType()
 stringType = ir.IntType(8).as_pointer()
 boolType = ir.IntType(1)
 
-if tree.return_type == "int":
-    returnType = intType
-elif tree.return_type == "float":
-    returnType = floatType
-elif tree.return_type == "string":
-    returnType = stringType
-elif tree.return_type == "bool":
-    returnType = boolType
-else:
-    raise ValueError(f"Tipo de retorno desconocido: {tree.return_type}")
-
 module = ir.Module(name="prog")
 
-param_types = []
 
-for param in tree.params:
-    param_types.append(get_llvm_type(param.var_type))
+# PRIMERA PASADA:
+# Crear las firmas LLVM de todas las funciones.
+function_table = {}
 
-fnty = ir.FunctionType(returnType, param_types)
-func = ir.Function(module, fnty, name=tree.name)
+for function_node in tree.functions:
+    if function_node.name in function_table:
+        raise NameError(f"La función '{function_node.name}' ya fue declarada")
 
-function_table = {
-    tree.name: (
-        func,
-        tree.return_type,
-        [param.var_type for param in tree.params]
+    returnType = get_llvm_type(function_node.return_type)
+
+    param_types = []
+
+    for param in function_node.params:
+        param_types.append(get_llvm_type(param.var_type))
+
+    fnty = ir.FunctionType(returnType, param_types)
+    llvm_func = ir.Function(module, fnty, name=function_node.name)
+
+    for llvm_arg, param in zip(llvm_func.args, function_node.params):
+        llvm_arg.name = param.name
+
+    function_table[function_node.name] = (
+        llvm_func,
+        function_node.return_type,
+        [param.var_type for param in function_node.params]
     )
-}
 
-for llvm_arg, param in zip(func.args, tree.params):
-    llvm_arg.name = param.name
 
-block = func.append_basic_block(name="entry")
-builder = ir.IRBuilder(block)
+if "main" not in function_table:
+    raise NameError("El programa debe tener una función main")
 
-print(tree)
 
-irgen = IRGenerator(builder, intType, floatType, stringType, boolType, module, tree.return_type, function_table)
-tree.accept(irgen)
+# SEGUNDA PASADA:
+# Generar el cuerpo de cada función.
+for function_node in tree.functions:
+    llvm_func, return_type, param_types = function_table[function_node.name]
 
-if not builder.block.is_terminated:
-    raise TypeError("La función no tiene return en todos los caminos")
+    block = llvm_func.append_basic_block(name="entry")
+    builder = ir.IRBuilder(block)
+
+    irgen = IRGenerator(
+        builder,
+        intType,
+        floatType,
+        stringType,
+        boolType,
+        module,
+        function_node.return_type,
+        function_table
+    )
+
+    function_node.accept(irgen)
+
+    if not builder.block.is_terminated:
+        raise TypeError(
+            f"La función '{function_node.name}' no tiene return en todos los caminos"
+        )
+
 
 print(module)
 # %%
-
-"""
-Prioridad alta:
-5. funciones además de main
-
-Prioridad media:
-6. char
-8. bloques como statement
-9. empty statement ;
-
-Prioridad avanzada:
-10. arrays
-11. global variables
-12. declaraciones múltiples con coma
-"""
