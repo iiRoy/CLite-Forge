@@ -9,7 +9,7 @@
 import ply.lex as lex
 import ply.yacc as yacc
 
-from arbol import Visitor, IRGenerator, Program, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break, WhileStatement
+from arbol import Visitor, IRGenerator, Program, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break, WhileStatement, DoWhileStatement
 from llvmlite import ir
 
 # %%
@@ -35,6 +35,7 @@ reserved = {
     'default': 'DEFAULT',
     'break': 'BREAK',
     'while': 'WHILE',
+    'do': 'DO'
 }
 
 tokens = ['ID', 'INTLIT', 'DOUBLELIT', 'STRINGLIT', 'EQ', 'NE', 'LE', 'GE'] + list(reserved.values())
@@ -204,6 +205,7 @@ def p_Statement(p):
                 | SwitchStatement
                 | Break
                 | WhileStatement
+                | DoWhileStatement
     """
     p[0] = p[1]
 
@@ -280,6 +282,12 @@ def p_WhileStatement(p):
     WhileStatement : WHILE '(' Condition ')' '{' Statements '}'
     """
     p[0] = WhileStatement(p[3], p[6])
+
+def p_DoWhileStatement(p):
+    """
+    DoWhileStatement : DO '{' Statements '}' WHILE '(' Condition ')' ';'
+    """
+    p[0] = DoWhileStatement(p[3], p[7])
 
 def p_Return(p):
     """
@@ -545,9 +553,16 @@ double main()
     */
 
     // CASE 3: WHILE STATEMENT
+    /*
     while (x < 15) {
         x = x + 1;
     }
+    */
+
+    // CASE 4: DO WHILE STATEMENT
+    do {
+        x = x - 1;
+    } while (x > 5);
 
     //END CASE
     printf("z = %i\n", z);

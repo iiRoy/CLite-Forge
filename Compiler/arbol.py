@@ -196,6 +196,17 @@ class WhileStatement(ASTNode):
     def __str__(self):
         return f"[WHILE, {self.condition}, {self.stmts}]"
 
+class DoWhileStatement(ASTNode):
+    def __init__(self, stmts: Statements, condition: ASTNode) -> None:
+        self.stmts = stmts
+        self.condition = condition
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_do_while_statement(self)
+
+    def __str__(self):
+        return f"[DO_WHILE, {self.stmts}, {self.condition}]"
+
 class Return(ASTNode):
     def __init__(self, expression: ASTNode) -> None:
         self.expression = expression
@@ -342,6 +353,10 @@ class Visitor(ABC):
 
     @abstractmethod
     def visit_while_statement(self, node: WhileStatement) -> None:
+        pass
+
+    @abstractmethod
+    def visit_do_while_statement(self, node: DoWhileStatement) -> None:
         pass
 
     @abstractmethod
@@ -802,6 +817,38 @@ class IRGenerator(Visitor):
         # Si el cuerpo no terminó con return, vuelve a evaluar la condición
         if not self.builder.block.is_terminated:
             self.builder.branch(condition_block)
+
+        # CONTINUACIÓN
+        self.builder.position_at_end(end_block)
+
+    def visit_do_while_statement(self, node: DoWhileStatement) -> None:
+        current_function = self.builder.function
+
+        body_block = current_function.append_basic_block("do.body")
+        condition_block = current_function.append_basic_block("do.cond")
+        end_block = current_function.append_basic_block("do.end")
+
+        # En do/while, siempre se entra primero al cuerpo.
+        self.builder.branch(body_block)
+
+        # BODY
+        self.builder.position_at_end(body_block)
+        node.stmts.accept(self)
+
+        # Si el cuerpo no terminó con return, revisa la condición.
+        if not self.builder.block.is_terminated:
+            self.builder.branch(condition_block)
+
+        # CONDITION
+        self.builder.position_at_end(condition_block)
+        node.condition.accept(self)
+
+        condition, condition_type = self.stack.pop()
+
+        if condition_type != "bool":
+            raise TypeError("La condición del do/while debe ser bool")
+
+        self.builder.cbranch(condition, body_block, end_block)
 
         # CONTINUACIÓN
         self.builder.position_at_end(end_block)
