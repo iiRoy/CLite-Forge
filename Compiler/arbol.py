@@ -102,16 +102,17 @@ class Parameter:
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
 """
 class Declaration(ASTNode):
-    def __init__(self, var_type: str, name: str, initializer: ASTNode = None) -> None:
+    def __init__(self, var_type: str, name: str, initializer: ASTNode = None, array_size: int = None) -> None:
         self.var_type = var_type
         self.name = name
         self.initializer = initializer
+        self.array_size = array_size
 
     def accept(self, visitor: Visitor):
         visitor.visit_declaration(self)
 
     def __str__(self):
-        return f"[DECL, {self.var_type}, {self.name}, {self.initializer}]"
+        return f"[DECL, {self.var_type}, {self.name}, size={self.array_size}, init={self.initializer}]"
 
 class Declarations(ASTNode):
     def __init__(self, declarations: list[Declaration]) -> None:
@@ -285,6 +286,17 @@ class Return(ASTNode):
                  E x p r e s s i o n s
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
 """
+class ArrayAccess(ASTNode):
+    def __init__(self, name: str, index: ASTNode) -> None:
+        self.name = name
+        self.index = index
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_array_access(self)
+
+    def __str__(self):
+        return f"[ARRAY_ACCESS, {self.name}, {self.index}]"
+
 class BinaryOp(ASTNode):
     def __init__(self, op: str, lhs: ASTNode, rhs: ASTNode) -> None:
         self.lhs = lhs
@@ -474,6 +486,10 @@ class Visitor(ABC):
         pass
 
     @abstractmethod
+    def visit_array_access(self, node: ArrayAccess) -> None:
+        pass
+
+    @abstractmethod
     def visit_return(self, node: Return) -> None:
         pass
 
@@ -615,6 +631,16 @@ class IRGenerator(Visitor):
 
         raise TypeError(f"No se puede convertir '{value_type}' a '{target_type}'")
 
+    def cast_assignment_value(self, value, value_type, target_type):
+        if value_type == target_type:
+            return value, value_type
+
+        if target_type == "float" and value_type == "int":
+            value = self.builder.sitofp(value, self.floatType)
+            return value, "float"
+
+        raise TypeError(f"No se puede asignar '{value_type}' a '{target_type}'")
+
     def visit_literal(self, node: Literal) -> None:
         if node.type == "INT":
             value = ir.Constant(self.intType, node.value)
@@ -649,12 +675,31 @@ class IRGenerator(Visitor):
             ptr = self.builder.alloca(llvm_type, name=param.name)
             self.builder.store(llvm_arg, ptr)
 
-            self.symbol_table[param.name] = (ptr, var_type)
+            self.symbol_table[param.name] = (ptr, var_type, None)
             self.scope_stack[-1].add(param.name)
 
     def visit_declarations(self, node: Declarations) -> None:
         for declaration in node.declarations:
             declaration.accept(self)
+
+    def get_default_value(self, var_type):
+        if var_type == "int":
+            return ir.Constant(self.intType, 0)
+
+        elif var_type == "float":
+            return ir.Constant(self.floatType, 0.0)
+
+        elif var_type == "char":
+            return ir.Constant(self.charType, 0)
+
+        elif var_type == "bool":
+            return ir.Constant(self.boolType, 0)
+
+        elif var_type == "string":
+            return ir.Constant(self.stringType, None)
+
+        else:
+            raise ValueError(f"Tipo desconocido: {var_type}")
 
     def visit_declaration(self, node: Declaration) -> None:
         if node.var_type == "int":
@@ -678,10 +723,34 @@ class IRGenerator(Visitor):
         if node.name in self.symbol_table:
             raise NameError(f"La variable '{node.name}' ya fue declarada")
 
+        if node.array_size is not None:
+            if node.array_size <= 0:
+                raise ValueError("El tamaño de un arreglo debe ser mayor que 0")
+
+            if node.initializer is not None:
+                raise TypeError("Los arreglos todavía no soportan inicializador")
+
+            array_type = ir.ArrayType(llvm_type, node.array_size)
+            ptr = self.builder.alloca(array_type, name=node.name)
+
+            self.symbol_table[node.name] = (ptr, var_type, node.array_size)
+            self.scope_stack[-1].add(node.name)
+
+            default_value = self.get_default_value(var_type)
+
+            for i in range(node.array_size):
+                zero = ir.Constant(self.intType, 0)
+                index = ir.Constant(self.intType, i)
+
+                elem_ptr = self.builder.gep(ptr, [zero, index], inbounds=True)
+                self.builder.store(default_value, elem_ptr)
+
+            return
+
         #Reserva espacio en memoria para la variable.
         ptr = self.builder.alloca(llvm_type, name=node.name)
         #Guarda la dirección de la variable en symbol_table.
-        self.symbol_table[node.name] = (ptr, var_type)
+        self.symbol_table[node.name] = (ptr, var_type, None)
         self.scope_stack[-1].add(node.name)
 
         """
@@ -700,39 +769,24 @@ class IRGenerator(Visitor):
 
             #Extrae los últimos elementos de la pila
             value, value_type = self.stack.pop()
-
-            if var_type == "float" and value_type == "int":
-                value = self.builder.sitofp(value, self.floatType)
-                value_type = "float"
-
-            elif var_type != value_type:
-                raise TypeError(f"No se puede asignar '{value_type}' a '{var_type}'")
+            value, value_type = self.cast_assignment_value(value, value_type, var_type)
 
             self.builder.store(value, ptr)
         
         else:
-            if var_type == "int":
-                default_value = ir.Constant(self.intType, 0)
-                self.builder.store(default_value, ptr)
-            elif var_type == "float":
-                default_value = ir.Constant(self.floatType, 0.0)
-                self.builder.store(default_value, ptr)
-            elif var_type == "string":
-                default_value = ir.Constant(self.stringType, None)
-                self.builder.store(default_value, ptr)
-            elif var_type == "bool":
-                default_value = ir.Constant(self.boolType, 0)
-                self.builder.store(default_value, ptr)
-            elif var_type == "char":
-                default_value = ir.Constant(self.charType, 0)
-            else:
-                raise ValueError(f"Tipo desconocido: {var_type}")
-
+            default_value = self.get_default_value(var_type)
             self.builder.store(default_value, ptr)
     
     def visit_variable(self, node: Variable) -> None:
+        if node.name not in self.symbol_table:
+            raise NameError(f"La variable '{node.name}' no ha sido declarada")
+
         #Recupera la dirección de memoria de la variable a guardar.
-        ptr, var_type = self.symbol_table[node.name]
+        ptr, var_type, array_size = self.symbol_table[node.name]
+
+        if array_size is not None:
+            raise TypeError(f"El arreglo '{node.name}' debe accederse con índice")
+
         #Carga el valor de la variable a través de la memoria.
         value = self.builder.load(ptr, name=node.name)
         #Guarda los cambios en la pila
@@ -749,23 +803,23 @@ class IRGenerator(Visitor):
         node.expression.accept(self)
 
         value, value_type = self.stack.pop()
-        if node.variable not in self.symbol_table:
-            raise NameError(f"La variable '{node.variable}' no ha sido declarada")
 
-        ptr, var_type = self.symbol_table[node.variable]
+        if isinstance(node.variable, ArrayAccess):
+            ptr, target_type = self.get_array_element_ptr(node.variable)
 
-        if var_type == "float" and value_type == "int":
-            value = self.builder.sitofp(value, self.floatType)
-            value_type = "float"
+        else:
+            if node.variable not in self.symbol_table:
+                raise NameError(f"La variable '{node.variable}' no ha sido declarada")
 
-        elif var_type == "int" and value_type == "float":
-            raise TypeError("No se puede asignar 'FLOAT' a 'INT' sin conversión explícita")
+            ptr, target_type, array_size = self.symbol_table[node.variable]
 
-        elif var_type != value_type:
-            raise TypeError(f"No se puede asignar '{value_type}' a '{var_type}'")
+            if array_size is not None:
+                raise TypeError(f"No se puede asignar directamente al arreglo '{node.variable}'")
+
+        value, value_type = self.cast_assignment_value(value, value_type, target_type)
 
         self.builder.store(value, ptr)
-
+        
     def visit_binary_op(self, node: BinaryOp) -> None:
         node.lhs.accept(self)
         node.rhs.accept(self)
@@ -1181,6 +1235,39 @@ class IRGenerator(Visitor):
 
     def visit_empty_statement(self, node: EmptyStatement) -> None:
         pass
+
+    def get_array_element_ptr(self, node: ArrayAccess):
+        if node.name not in self.symbol_table:
+            raise NameError(f"El arreglo '{node.name}' no ha sido declarado")
+
+        array_ptr, element_type, array_size = self.symbol_table[node.name]
+
+        if array_size is None:
+            raise TypeError(f"'{node.name}' no es un arreglo")
+
+        node.index.accept(self)
+
+        index_value, index_type = self.stack.pop()
+
+        if index_type != "int":
+            raise TypeError("El índice de un arreglo debe ser int")
+
+        zero = ir.Constant(self.intType, 0)
+
+        elem_ptr = self.builder.gep(
+            array_ptr,
+            [zero, index_value],
+            inbounds=True
+        )
+
+        return elem_ptr, element_type
+
+    def visit_array_access(self, node: ArrayAccess) -> None:
+        elem_ptr, element_type = self.get_array_element_ptr(node)
+
+        value = self.builder.load(elem_ptr, name=f"{node.name}.elem")
+
+        self.stack.append((value, element_type))
 
     def visit_return(self, node: Return) -> None:
         if self.return_type == "void":

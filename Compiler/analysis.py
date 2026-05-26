@@ -13,7 +13,7 @@ importlib.reload(arbol)
 import ply.lex as lex
 import ply.yacc as yacc
 
-from arbol import Visitor, IRGenerator, Program, FunctionDefinition, Parameter, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break, WhileStatement, DoWhileStatement, ForStatement, LogicalOp, Call, CallStatement, BlockStatement, EmptyStatement
+from arbol import Visitor, IRGenerator, Program, FunctionDefinition, Parameter, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break, WhileStatement, DoWhileStatement, ForStatement, LogicalOp, Call, CallStatement, BlockStatement, EmptyStatement, ArrayAccess
 from llvmlite import ir
 
 #%%
@@ -70,7 +70,7 @@ reserved = {
 tokens = ['ID', 'INTLIT', 'FLOATLIT', 'STRINGLIT', 'CHARLIT', 'EQ', 'NE', 'LE', 'GE', 'AND', 'OR'] + list(reserved.values())
 t_ignore = ' \t'
 
-literals = '+-*/%(){},;=<>!:'
+literals = '+-*/%(){}[],;=<>!:'
 
 #Reconocimiento de nombres
 """
@@ -279,11 +279,16 @@ def p_Declaration(p):
     """
     Declaration : Type ID ';'
                 | Type ID '=' Expression ';'
+                | Type ID '[' INTLIT ']' ';'
     """
     if len(p) == 4:
         p[0] = Declaration(p[1], p[2])
-    else:
+
+    elif len(p) == 6:
         p[0] = Declaration(p[1], p[2], p[4])
+
+    else:
+        p[0] = Declaration(p[1], p[2], array_size=p[4])
 
 """
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
@@ -334,6 +339,7 @@ def p_CallStatement(p):
 def p_Assignment(p):
     """
     Assignment : ID '=' Expression ';'
+               | ArrayAccess '=' Expression ';'
     """
     p[0] = Assignment(p[1], p[3])
 
@@ -485,6 +491,12 @@ def p_OptionalArguments(p):
         p[0] = []
     else:
         p[0] = p[1]
+
+def p_ArrayAccess(p):
+    """
+    ArrayAccess : ID '[' Expression ']'
+    """
+    p[0] = ArrayAccess(p[1], p[3])
 
 """
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
@@ -641,6 +653,12 @@ def p_Factor_call(p):
     """
     p[0] = p[1]
 
+def p_Factor_array_access(p):
+    """
+    Factor : ArrayAccess
+    """
+    p[0] = p[1]
+
 """
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
                       H e l p e r s
@@ -740,16 +758,18 @@ Declarations([
 """
 
 data = """
-void printNumber(int n)
-{
-    printf("n = %i\n", n);
-}
-
 int main()
 {
-    int y = 10;
-    printNumber(y);
-    return 0;
+    int arr[5];
+    int i;
+
+    i = 0;
+
+    arr[0] = 10;
+    arr[1] = 20;
+    arr[2] = arr[0] + arr[1];
+
+    return arr[2];
 }
 """
 
