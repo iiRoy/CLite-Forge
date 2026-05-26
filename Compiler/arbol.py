@@ -252,6 +252,17 @@ class CallStatement(ASTNode):
     def __str__(self):
         return f"[CALL_STMT, {self.call}]"
 
+class BlockStatement(ASTNode):
+    def __init__(self, decls: Declarations, stmts: Statements) -> None:
+        self.decls = decls
+        self.stmts = stmts
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_block_statement(self)
+
+    def __str__(self):
+        return f"[BLOCK, {self.decls}, {self.stmts}]"
+
 class Return(ASTNode):
     def __init__(self, expression: ASTNode) -> None:
         self.expression = expression
@@ -448,11 +459,15 @@ class Visitor(ABC):
         pass
 
     @abstractmethod
+    def visit_block_statement(self, node: BlockStatement) -> None:
+        pass
+
+    @abstractmethod
     def visit_return(self, node: Return) -> None:
         pass
 
 class IRGenerator(Visitor):
-    def __init__(self, builder, intType, floatType, stringType, boolType, module, return_type, functions=None):
+    def __init__(self, builder, intType, floatType, stringType, boolType, charType, module, return_type, functions=None):
         # Pila temporal donde el IRGenerator guarda resultados mientras evalúa expresiones.
         # La pila guarda tuplas
         self.stack = []
@@ -468,6 +483,9 @@ class IRGenerator(Visitor):
         # ptr_x y ptr_y son direcciones de memoria generadas con alloca.
         self.symbol_table = {}
 
+        # Guarda las variables declaradas dentro de un bloque para que no queden vivas fuera del bloque
+        self.scope_stack = [set()]
+
         # Objeto que escribe instrucciones LLVM.
         self.builder = builder
 
@@ -476,6 +494,7 @@ class IRGenerator(Visitor):
         self.floatType = floatType
         self.stringType = stringType
         self.boolType = ir.IntType(1)
+        self.charType = charType
 
         # Guardar el valor que aparece en un return
         self.return_type = return_type
@@ -544,6 +563,8 @@ class IRGenerator(Visitor):
             return self.stringType
         elif type_name == "bool":
             return self.boolType
+        elif type_name == "char":
+            return self.charType
         else:
             raise ValueError(f"Tipo desconocido: {type_name}")
 
@@ -574,6 +595,10 @@ class IRGenerator(Visitor):
             value = ir.Constant(self.boolType, node.value)
             self.stack.append((value, "bool"))
 
+        elif node.type == "CHAR":
+            value = ir.Constant(self.charType, node.value)
+            self.stack.append((value, "char"))
+
     def visit_program(self, node: Program) -> None:
         raise RuntimeError("No uses tree.accept(irgen) para múltiples funciones. Genera cada función en analysis.py.")
 
@@ -588,6 +613,7 @@ class IRGenerator(Visitor):
             self.builder.store(llvm_arg, ptr)
 
             self.symbol_table[param.name] = (ptr, var_type)
+            self.scope_stack[-1].add(param.name)
 
     def visit_declarations(self, node: Declarations) -> None:
         for declaration in node.declarations:
@@ -606,6 +632,9 @@ class IRGenerator(Visitor):
         elif node.var_type == "bool":
             llvm_type = self.boolType
             var_type = "bool"
+        elif node.var_type == "char":
+            llvm_type = self.charType
+            var_type = "char"
         else:
             raise ValueError(f"Tipo desconocido: {node.var_type}")
 
@@ -616,6 +645,7 @@ class IRGenerator(Visitor):
         ptr = self.builder.alloca(llvm_type, name=node.name)
         #Guarda la dirección de la variable en symbol_table.
         self.symbol_table[node.name] = (ptr, var_type)
+        self.scope_stack[-1].add(node.name)
 
         """
         int x = 23 + 2;
@@ -656,6 +686,8 @@ class IRGenerator(Visitor):
             elif var_type == "bool":
                 default_value = ir.Constant(self.boolType, 0)
                 self.builder.store(default_value, ptr)
+            elif var_type == "char":
+                default_value = ir.Constant(self.charType, 0)
             else:
                 raise ValueError(f"Tipo desconocido: {var_type}")
 
@@ -704,7 +736,7 @@ class IRGenerator(Visitor):
         rhs, rhs_type = self.stack.pop()
         lhs, lhs_type = self.stack.pop()
 
-        invalid_types = {"string", "bool"}
+        invalid_types = {"string", "bool", "char"}
 
         if lhs_type in invalid_types or rhs_type in invalid_types:
             raise TypeError(f"No se puede usar el operador {node.op} con {lhs_type} y {rhs_type}")
@@ -756,6 +788,14 @@ class IRGenerator(Visitor):
 
         if lhs_type == "string" or rhs_type == "string":
             raise TypeError(f"No se puede comparar {lhs_type} con {rhs_type}")
+
+        if lhs_type == "char" or rhs_type == "char":
+            if lhs_type != rhs_type:
+                raise TypeError(f"No se puede comparar {lhs_type} con {rhs_type}")
+
+            result = self.builder.icmp_signed(node.op, lhs, rhs)
+            self.stack.append((result, "bool"))
+            return
 
         if lhs_type == "bool" or rhs_type == "bool":
             if lhs_type != rhs_type:
@@ -825,6 +865,9 @@ class IRGenerator(Visitor):
             value, value_type = self.stack.pop()
 
             if value_type == "bool":
+                value = self.builder.zext(value, self.intType)
+
+            elif value_type == "char":
                 value = self.builder.zext(value, self.intType)
 
             printf_args.append(value)
@@ -1107,6 +1150,20 @@ class IRGenerator(Visitor):
         self.visit_parameters(node.params)
         node.decls.accept(self)
         node.stmts.accept(self)
+
+    def visit_block_statement(self, node: BlockStatement) -> None:
+        # Crear nuevo scope para este bloque
+        self.scope_stack.append(set())
+
+        node.decls.accept(self)
+        node.stmts.accept(self)
+
+        # Sacar variables locales del bloque
+        local_names = self.scope_stack.pop()
+
+        for name in local_names:
+            if name in self.symbol_table:
+                del self.symbol_table[name]
 
     def visit_return(self, node: Return) -> None:
         node.expression.accept(self)

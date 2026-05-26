@@ -13,7 +13,7 @@ importlib.reload(arbol)
 import ply.lex as lex
 import ply.yacc as yacc
 
-from arbol import Visitor, IRGenerator, Program, FunctionDefinition, Parameter, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break, WhileStatement, DoWhileStatement, ForStatement, LogicalOp, Call, CallStatement
+from arbol import Visitor, IRGenerator, Program, FunctionDefinition, Parameter, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break, WhileStatement, DoWhileStatement, ForStatement, LogicalOp, Call, CallStatement, BlockStatement
 from llvmlite import ir
 
 #%%
@@ -31,6 +31,8 @@ def get_llvm_type(type_name):
         return stringType
     elif type_name == "bool":
         return boolType
+    elif type_name == "char":
+        return charType
     else:
         raise ValueError(f"Tipo desconocido: {type_name}")
 
@@ -46,6 +48,7 @@ reserved = {
     'float': 'FLOAT',
     'string': 'STRING',
     'bool': 'BOOL',
+    'char': 'CHAR',
     'true': 'TRUE',
     'false': 'FALSE',
     'return': 'RETURN',
@@ -61,7 +64,7 @@ reserved = {
     'for': 'FOR'
 }
 
-tokens = ['ID', 'INTLIT', 'FLOATLIT', 'STRINGLIT', 'EQ', 'NE', 'LE', 'GE', 'AND', 'OR'] + list(reserved.values())
+tokens = ['ID', 'INTLIT', 'FLOATLIT', 'STRINGLIT', 'CHARLIT', 'EQ', 'NE', 'LE', 'GE', 'AND', 'OR'] + list(reserved.values())
 t_ignore = ' \t'
 
 literals = '+-*/%(){},;=<>!:'
@@ -96,11 +99,27 @@ def t_FLOATLIT(t):
 #Reconocimiento de strings
 """
 REGLA:
-Debe de estar entre comillas 
+Debe de estar entre comillas dobles y debe de ser un arreglo de chars
 """
 def t_STRINGLIT(t):
-    r'\"([^\"\\]|\\.)*\"|\'([^\'\\]|\\.)*\''
+    r'\"([^\"\\]|\\.)*\"'
     t.value = bytes(t.value[1:-1], "utf-8").decode("unicode_escape")
+    return t
+
+#Reconocimiento de chars
+"""
+REGLA:
+Debe de estar entre comillas simples y debe de ser solo un carácter
+"""
+def t_CHARLIT(t):
+    r"'([^'\\]|\\.)'"
+    char_text = t.value[1:-1]
+    char_text = bytes(char_text, "utf-8").decode("unicode_escape")
+
+    if len(char_text) != 1:
+        raise ValueError("Un char debe contener exactamente un carácter")
+
+    t.value = ord(char_text)
     return t
 
 #Reconocimiento de números
@@ -224,6 +243,7 @@ def p_Type(p):
          | FLOAT 
          | STRING
          | BOOL
+         | CHAR
     """
     p[0] = p[1]
 
@@ -285,6 +305,7 @@ def p_Statement(p):
                 | DoWhileStatement
                 | ForStatement
                 | CallStatement
+                | BlockStatement
     """
     p[0] = p[1]
 
@@ -307,15 +328,15 @@ def p_Assignment(p):
 
 def p_IfStatement_if(p):
     """
-    IfStatement : IF '(' Condition ')' '{' Statements '}'
+    IfStatement : IF '(' Condition ')' BlockStatement
     """
-    p[0] = IfStatement(p[3], p[6], None)
+    p[0] = IfStatement(p[3], p[5], None)
 
 def p_IfStatement_if_else(p):
     """
-    IfStatement : IF '(' Condition ')' '{' Statements '}' ELSE '{' Statements '}'
+    IfStatement : IF '(' Condition ')' BlockStatement ELSE BlockStatement
     """
-    p[0] = IfStatement(p[3], p[6], p[10])
+    p[0] = IfStatement(p[3], p[5], p[7])
 
 def p_Print(p):
     """
@@ -364,21 +385,21 @@ def p_Break(p):
 
 def p_WhileStatement(p):
     """
-    WhileStatement : WHILE '(' Condition ')' '{' Statements '}'
+    WhileStatement : WHILE '(' Condition ')' BlockStatement
     """
-    p[0] = WhileStatement(p[3], p[6])
+    p[0] = WhileStatement(p[3], p[5])
 
 def p_DoWhileStatement(p):
     """
-    DoWhileStatement : DO '{' Statements '}' WHILE '(' Condition ')' ';'
+    DoWhileStatement : DO BlockStatement WHILE '(' Condition ')' ';'
     """
-    p[0] = DoWhileStatement(p[3], p[7])
+    p[0] = DoWhileStatement(p[2], p[5])
 
 def p_ForStatement(p):
     """
-    ForStatement : FOR '(' ForInit ';' Condition ';' ForUpdate ')' '{' Statements '}'
+    ForStatement : FOR '(' ForInit ';' Condition ';' ForUpdate ')' BlockStatement
     """
-    p[0] = ForStatement(p[3], p[5], p[7], p[10])
+    p[0] = ForStatement(p[3], p[5], p[7], p[9])
 
 def p_ForInit(p):
     """
@@ -399,6 +420,12 @@ def p_ForUpdate(p):
         p[0] = None
     else:
         p[0] = Assignment(p[1], p[3])
+
+def p_BlockStatement(p):
+    """
+    BlockStatement : '{' Declarations Statements '}'
+    """
+    p[0] = BlockStatement(p[2], p[3])
 
 def p_Return(p):
     """
@@ -528,13 +555,11 @@ def p_Factor_int(p):
     """
     p[0] = Literal(p[1], "INT")
 
-
 def p_Factor_float(p):
     """
     Factor : FLOATLIT
     """
     p[0] = Literal(p[1], "FLOAT")
-
 
 def p_Factor_string(p):
     """
@@ -548,6 +573,12 @@ def p_Factor_bool(p):
            | FALSE
     """
     p[0] = Literal(p[1], "BOOL")
+
+def p_Factor_char(p):
+    """
+    Factor : CHARLIT
+    """
+    p[0] = Literal(p[1], "CHAR")
 
 def p_Factor_not(p):
     """
@@ -714,6 +745,7 @@ intType = ir.IntType(32)
 floatType = ir.FloatType()
 stringType = ir.IntType(8).as_pointer()
 boolType = ir.IntType(1)
+charType = ir.IntType(8)
 
 module = ir.Module(name="prog")
 
@@ -764,6 +796,7 @@ for function_node in tree.functions:
         floatType,
         stringType,
         boolType,
+        charType,
         module,
         function_node.return_type,
         function_table
