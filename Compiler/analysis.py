@@ -13,7 +13,7 @@ importlib.reload(arbol)
 import ply.lex as lex
 import ply.yacc as yacc
 
-from arbol import Visitor, IRGenerator, Program, FunctionDefinition, Parameter, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break, WhileStatement, DoWhileStatement, ForStatement, LogicalOp, Call, CallStatement, BlockStatement
+from arbol import Visitor, IRGenerator, Program, FunctionDefinition, Parameter, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break, WhileStatement, DoWhileStatement, ForStatement, LogicalOp, Call, CallStatement, BlockStatement, EmptyStatement
 from llvmlite import ir
 
 #%%
@@ -33,6 +33,8 @@ def get_llvm_type(type_name):
         return boolType
     elif type_name == "char":
         return charType
+    elif type_name == "void":
+        return ir.VoidType()
     else:
         raise ValueError(f"Tipo desconocido: {type_name}")
 
@@ -49,6 +51,7 @@ reserved = {
     'string': 'STRING',
     'bool': 'BOOL',
     'char': 'CHAR',
+    'void': 'VOID',
     'true': 'TRUE',
     'false': 'FALSE',
     'return': 'RETURN',
@@ -195,9 +198,9 @@ def p_FunctionList_many(p):
 
 def p_FunctionDefinition(p):
     """
-    FunctionDefinition : Type ID '(' Parameters ')' '{' Declarations Statements '}'
+    FunctionDefinition : ReturnType ID '(' Parameters ')' BlockStatement
     """
-    p[0] = FunctionDefinition(p[1], p[2], p[4], p[7], p[8])
+    p[0] = FunctionDefinition(p[1], p[2], p[4], p[6].decls, p[6].stmts)
 
 def p_Parameters(p):
     """
@@ -244,6 +247,13 @@ def p_Type(p):
          | STRING
          | BOOL
          | CHAR
+    """
+    p[0] = p[1]
+
+def p_ReturnType(p):
+    """
+    ReturnType : Type
+               | VOID
     """
     p[0] = p[1]
 
@@ -306,6 +316,7 @@ def p_Statement(p):
                 | ForStatement
                 | CallStatement
                 | BlockStatement
+                | EmptyStatement
     """
     p[0] = p[1]
 
@@ -427,11 +438,24 @@ def p_BlockStatement(p):
     """
     p[0] = BlockStatement(p[2], p[3])
 
-def p_Return(p):
+def p_EmptyStatement(p):
+    """
+    EmptyStatement : ';'
+    """
+    p[0] = EmptyStatement()
+
+def p_Return_expr(p):
     """
     Return : RETURN Expression ';'
     """
     p[0] = Return(p[2])
+
+
+def p_Return_void(p):
+    """
+    Return : RETURN ';'
+    """
+    p[0] = Return()
 
 """
 ▐░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▌
@@ -716,19 +740,16 @@ Declarations([
 """
 
 data = """
-int factorial(int n)
+void printNumber(int n)
 {
-    if (n <= 1) {
-        return 1;
-    }
-
-    return n * factorial(n - 1);
+    printf("n = %i\n", n);
 }
 
 int main()
 {
-    int result = factorial(5);
-    return result;
+    int y = 10;
+    printNumber(y);
+    return 0;
 }
 """
 
@@ -805,9 +826,12 @@ for function_node in tree.functions:
     function_node.accept(irgen)
 
     if not builder.block.is_terminated:
-        raise TypeError(
-            f"La función '{function_node.name}' no tiene return en todos los caminos"
-        )
+        if function_node.return_type == "void":
+            builder.ret_void()
+        else:
+            raise TypeError(
+                f"La función '{function_node.name}' no tiene return en todos los caminos"
+            )
 
 
 print(module)

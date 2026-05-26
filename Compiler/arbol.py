@@ -263,8 +263,15 @@ class BlockStatement(ASTNode):
     def __str__(self):
         return f"[BLOCK, {self.decls}, {self.stmts}]"
 
+class EmptyStatement(ASTNode):
+    def accept(self, visitor: Visitor):
+        visitor.visit_empty_statement(self)
+
+    def __str__(self):
+        return "[EMPTY_STMT]"
+
 class Return(ASTNode):
-    def __init__(self, expression: ASTNode) -> None:
+    def __init__(self, expression: ASTNode = None) -> None:
         self.expression = expression
 
     def accept(self, visitor: Visitor):
@@ -463,6 +470,10 @@ class Visitor(ABC):
         pass
 
     @abstractmethod
+    def visit_empty_statement(self, node: EmptyStatement) -> None:
+        pass
+
+    @abstractmethod
     def visit_return(self, node: Return) -> None:
         pass
 
@@ -553,6 +564,32 @@ class IRGenerator(Visitor):
         global_string.initializer = string_value
 
         return self.builder.bitcast(global_string, self.stringType)
+
+    def emit_call(self, node: Call):
+        if node.name not in self.functions:
+            raise NameError(f"La función '{node.name}' no ha sido declarada")
+
+        llvm_func, return_type, param_types = self.functions[node.name]
+
+        if len(node.args) != len(param_types):
+            raise TypeError(
+                f"La función '{node.name}' esperaba {len(param_types)} argumentos, "
+                f"pero recibió {len(node.args)}"
+            )
+
+        call_args = []
+
+        for arg_node, expected_type in zip(node.args, param_types):
+            arg_node.accept(self)
+
+            value, value_type = self.stack.pop()
+            value, value_type = self.cast_value(value, value_type, expected_type)
+
+            call_args.append(value)
+
+        result = self.builder.call(llvm_func, call_args)
+
+        return result, return_type
 
     def get_llvm_type(self, type_name):
         if type_name == "int":
@@ -1113,38 +1150,15 @@ class IRGenerator(Visitor):
         self.stack.append((result, "bool"))
 
     def visit_call(self, node: Call) -> None:
-        if node.name not in self.functions:
-            raise NameError(f"La función '{node.name}' no ha sido declarada")
+        result, return_type = self.emit_call(node)
 
-        llvm_func, return_type, param_types = self.functions[node.name]
-
-        if len(node.args) != len(param_types):
-            raise TypeError(
-                f"La función '{node.name}' esperaba {len(param_types)} argumentos, "
-                f"pero recibió {len(node.args)}"
-            )
-
-        call_args = []
-
-        for arg_node, expected_type in zip(node.args, param_types):
-            arg_node.accept(self)
-
-            value, value_type = self.stack.pop()
-            value, value_type = self.cast_value(value, value_type, expected_type)
-
-            call_args.append(value)
-
-        result = self.builder.call(llvm_func, call_args)
+        if return_type == "void":
+            raise TypeError(f"La función '{node.name}' retorna void y no puede usarse como expresión")
 
         self.stack.append((result, return_type))
 
     def visit_call_statement(self, node: CallStatement) -> None:
-        before = len(self.stack)
-
-        node.call.accept(self)
-
-        if len(self.stack) > before:
-            self.stack.pop()
+        self.emit_call(node.call)
     
     def visit_function_definition(self, node: FunctionDefinition) -> None:
         self.visit_parameters(node.params)
@@ -1165,7 +1179,20 @@ class IRGenerator(Visitor):
             if name in self.symbol_table:
                 del self.symbol_table[name]
 
+    def visit_empty_statement(self, node: EmptyStatement) -> None:
+        pass
+
     def visit_return(self, node: Return) -> None:
+        if self.return_type == "void":
+            if node.expression is not None:
+                raise TypeError("Una función void no puede retornar un valor")
+
+            self.builder.ret_void()
+            return
+
+        if node.expression is None:
+            raise TypeError(f"Una función '{self.return_type}' debe retornar un valor")
+
         node.expression.accept(self)
 
         value, value_type = self.stack.pop()
