@@ -207,6 +207,19 @@ class DoWhileStatement(ASTNode):
     def __str__(self):
         return f"[DO_WHILE, {self.stmts}, {self.condition}]"
 
+class ForStatement(ASTNode):
+    def __init__(self, init: ASTNode, condition: ASTNode, update: ASTNode, stmts: Statements) -> None:
+        self.init = init
+        self.condition = condition
+        self.update = update
+        self.stmts = stmts
+
+    def accept(self, visitor: Visitor):
+        visitor.visit_for_statement(self)
+
+    def __str__(self):
+        return f"[FOR, {self.init}, {self.condition}, {self.update}, {self.stmts}]"
+
 class Return(ASTNode):
     def __init__(self, expression: ASTNode) -> None:
         self.expression = expression
@@ -357,6 +370,10 @@ class Visitor(ABC):
 
     @abstractmethod
     def visit_do_while_statement(self, node: DoWhileStatement) -> None:
+        pass
+
+    @abstractmethod
+    def visit_for_statement(self, node: ForStatement) -> None:
         pass
 
     @abstractmethod
@@ -544,11 +561,12 @@ class IRGenerator(Visitor):
         node.expression.accept(self)
 
         value, value_type = self.stack.pop()
-        #Recupera la dirección de memoria de la variable a guardar.
+        if node.variable not in self.symbol_table:
+            raise NameError(f"La variable '{node.variable}' no ha sido declarada")
+
         ptr, var_type = self.symbol_table[node.variable]
 
         if var_type == "double" and value_type == "int":
-            # Signed integer to floating point
             value = self.builder.sitofp(value, self.doubleType)
             value_type = "double"
 
@@ -558,11 +576,7 @@ class IRGenerator(Visitor):
         elif var_type != value_type:
             raise TypeError(f"No se puede asignar '{value_type}' a '{var_type}'")
 
-        #Guarda la nueva asignación de la variable
         self.builder.store(value, ptr)
-
-        #Guarda los cambios en la pila
-        self.stack.append((value, var_type))
 
     def visit_binary_op(self, node: BinaryOp) -> None:
         node.lhs.accept(self)
@@ -851,6 +865,52 @@ class IRGenerator(Visitor):
         self.builder.cbranch(condition, body_block, end_block)
 
         # CONTINUACIÓN
+        self.builder.position_at_end(end_block)
+
+    def visit_for_statement(self, node: ForStatement) -> None:
+        current_function = self.builder.function
+
+        condition_block = current_function.append_basic_block("for.cond")
+        body_block = current_function.append_basic_block("for.body")
+        update_block = current_function.append_basic_block("for.update")
+        end_block = current_function.append_basic_block("for.end")
+
+        # 1. INIT
+        if node.init is not None:
+            node.init.accept(self)
+
+        # Después de inicializar, saltamos a revisar la condición.
+        if not self.builder.block.is_terminated:
+            self.builder.branch(condition_block)
+
+        # 2. CONDITION
+        self.builder.position_at_end(condition_block)
+        node.condition.accept(self)
+
+        condition, condition_type = self.stack.pop()
+
+        if condition_type != "bool":
+            raise TypeError("La condición del for debe ser bool")
+
+        self.builder.cbranch(condition, body_block, end_block)
+
+        # 3. BODY
+        self.builder.position_at_end(body_block)
+        node.stmts.accept(self)
+
+        if not self.builder.block.is_terminated:
+            self.builder.branch(update_block)
+
+        # 4. UPDATE
+        self.builder.position_at_end(update_block)
+
+        if node.update is not None:
+            node.update.accept(self)
+
+        if not self.builder.block.is_terminated:
+            self.builder.branch(condition_block)
+
+        # 5. END
         self.builder.position_at_end(end_block)
 
     def visit_return(self, node: Return) -> None:

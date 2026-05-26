@@ -9,7 +9,7 @@
 import ply.lex as lex
 import ply.yacc as yacc
 
-from arbol import Visitor, IRGenerator, Program, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break, WhileStatement, DoWhileStatement
+from arbol import Visitor, IRGenerator, Program, Declarations, Declaration, Statements, Literal, Variable, BinaryOp, Assignment, Return, Print, IfStatement, CompareOp, UnaryOp, SwitchStatement, SwitchCase, Break, WhileStatement, DoWhileStatement, ForStatement
 from llvmlite import ir
 
 # %%
@@ -35,7 +35,8 @@ reserved = {
     'default': 'DEFAULT',
     'break': 'BREAK',
     'while': 'WHILE',
-    'do': 'DO'
+    'do': 'DO',
+    'for': 'FOR'
 }
 
 tokens = ['ID', 'INTLIT', 'DOUBLELIT', 'STRINGLIT', 'EQ', 'NE', 'LE', 'GE'] + list(reserved.values())
@@ -206,6 +207,7 @@ def p_Statement(p):
                 | Break
                 | WhileStatement
                 | DoWhileStatement
+                | ForStatement
     """
     p[0] = p[1]
 
@@ -288,6 +290,32 @@ def p_DoWhileStatement(p):
     DoWhileStatement : DO '{' Statements '}' WHILE '(' Condition ')' ';'
     """
     p[0] = DoWhileStatement(p[3], p[7])
+
+def p_ForStatement(p):
+    """
+    ForStatement : FOR '(' ForInit ';' Condition ';' ForUpdate ')' '{' Statements '}'
+    """
+    p[0] = ForStatement(p[3], p[5], p[7], p[10])
+
+def p_ForInit(p):
+    """
+    ForInit : ID '=' Expression
+            | empty
+    """
+    if len(p) == 2:
+        p[0] = None
+    else:
+        p[0] = Assignment(p[1], p[3])
+
+def p_ForUpdate(p):
+    """
+    ForUpdate : ID '=' Expression
+              | empty
+    """
+    if len(p) == 2:
+        p[0] = None
+    else:
+        p[0] = Assignment(p[1], p[3])
 
 def p_Return(p):
     """
@@ -560,9 +588,18 @@ double main()
     */
 
     // CASE 4: DO WHILE STATEMENT
+    /*
     do {
         x = x - 1;
     } while (x > 5);
+    */
+
+    // CASE 5: FOR WHILE STATEMENT
+
+    int i;
+    for (i = 0; i < 5; i = i + 1) {
+        x = x + i;
+    }
 
     //END CASE
     printf("z = %i\n", z);
