@@ -579,15 +579,20 @@ class IRGenerator(Visitor):
     def create_global_string(self, text: str):
         text = text + "\0"
 
-        string_type = ir.ArrayType(ir.IntType(8), len(text))
+        encoded_text = bytearray(text.encode("utf8"))
+        string_type = ir.ArrayType(ir.IntType(8), len(encoded_text))
 
         string_value = ir.Constant(
             string_type,
-            bytearray(text.encode("utf8"))
+            encoded_text
         )
 
-        name = f".str{self.string_count}"
-        self.string_count = self.string_count + 1
+        while True:
+            name = f".str{self.string_count}"
+            self.string_count = self.string_count + 1
+
+            if name not in self.module.globals:
+                break
 
         global_string = ir.GlobalVariable(
             self.module,
@@ -600,7 +605,7 @@ class IRGenerator(Visitor):
         global_string.initializer = string_value
 
         return self.builder.bitcast(global_string, self.stringType)
-
+    
     def emit_call(self, node: Call):
         if node.name not in self.functions:
             raise NameError(f"La función '{node.name}' no ha sido declarada")

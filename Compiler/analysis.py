@@ -163,6 +163,11 @@ def t_COMMENT_MULTILINE(t):
     t.lexer.lineno += t.value.count('\n')
     pass
 
+# Ignorar directivas de preprocesador como #include <stdio.h>
+def t_PREPROCESSOR(t):
+    r'\#[^\n]*'
+    pass
+
 #Reconocimiento de errores
 def t_error(t):
     print(f"Illegal character '{t.value[0]}'")
@@ -882,7 +887,6 @@ Declarations([
 """
 
 # %%
-
 """
 ================================================================ 
                         L L V M   I R
@@ -968,86 +972,133 @@ int main()
 }
 """
 
-lexer = lex.lex()
-parser = yacc.yacc()
-tree = parser.parse(data, lexer=lexer)
+def compile_source(data: str):
+    lexer = lex.lex()
+    parser = yacc.yacc()
+    tree = parser.parse(data, lexer=lexer)
 
-if tree is None:
-    raise SyntaxError("El parser no pudo construir el AST.")
+    if tree is None:
+        raise SyntaxError("El parser no pudo construir el AST.")
 
+    # Configuración inicial LLVM IR
+    intType = ir.IntType(32)
+    floatType = ir.FloatType()
+    stringType = ir.IntType(8).as_pointer()
+    boolType = ir.IntType(1)
+    charType = ir.IntType(8)
 
-# Configuración inicial LLVM IR:
-intType = ir.IntType(32)
-floatType = ir.FloatType()
-stringType = ir.IntType(8).as_pointer()
-boolType = ir.IntType(1)
-charType = ir.IntType(8)
+    module = ir.Module(name="prog")
 
-module = ir.Module(name="prog")
-
-
-# PRIMERA PASADA:
-# Crear las firmas LLVM de todas las funciones.
-function_table = {}
-
-for function_node in tree.functions:
-    if function_node.name in function_table:
-        raise NameError(f"La función '{function_node.name}' ya fue declarada")
-
-    returnType = get_llvm_type(function_node.return_type)
-
-    param_types = []
-
-    for param in function_node.params:
-        param_types.append(get_llvm_type(param.var_type))
-
-    fnty = ir.FunctionType(returnType, param_types)
-    llvm_func = ir.Function(module, fnty, name=function_node.name)
-
-    for llvm_arg, param in zip(llvm_func.args, function_node.params):
-        llvm_arg.name = param.name
-
-    function_table[function_node.name] = (
-        llvm_func,
-        function_node.return_type,
-        [param.var_type for param in function_node.params]
-    )
-
-
-if "main" not in function_table:
-    raise NameError("El programa debe tener una función main")
-
-
-# SEGUNDA PASADA:
-# Generar el cuerpo de cada función.
-for function_node in tree.functions:
-    llvm_func, return_type, param_types = function_table[function_node.name]
-
-    block = llvm_func.append_basic_block(name="entry")
-    builder = ir.IRBuilder(block)
-
-    irgen = IRGenerator(
-        builder,
-        intType,
-        floatType,
-        stringType,
-        boolType,
-        charType,
-        module,
-        function_node.return_type,
-        function_table
-    )
-
-    function_node.accept(irgen)
-
-    if not builder.block.is_terminated:
-        if function_node.return_type == "void":
-            builder.ret_void()
+    def get_llvm_type(type_name):
+        if type_name == "int":
+            return intType
+        elif type_name == "float":
+            return floatType
+        elif type_name == "string":
+            return stringType
+        elif type_name == "bool":
+            return boolType
+        elif type_name == "char":
+            return charType
+        elif type_name == "void":
+            return ir.VoidType()
         else:
-            raise TypeError(
-                f"La función '{function_node.name}' no tiene return en todos los caminos"
-            )
+            raise ValueError(f"Tipo desconocido: {type_name}")
 
+    # PRIMERA PASADA:
+    # Crear las firmas LLVM de todas las funciones.
+    function_table = {}
 
+    for function_node in tree.functions:
+        if function_node.name in function_table:
+            raise NameError(f"La función '{function_node.name}' ya fue declarada")
+
+        returnType = get_llvm_type(function_node.return_type)
+
+        param_types = []
+
+        for param in function_node.params:
+            param_types.append(get_llvm_type(param.var_type))
+
+        fnty = ir.FunctionType(returnType, param_types)
+        llvm_func = ir.Function(module, fnty, name=function_node.name)
+
+        for llvm_arg, param in zip(llvm_func.args, function_node.params):
+            llvm_arg.name = param.name
+
+        function_table[function_node.name] = (
+            llvm_func,
+            function_node.return_type,
+            [param.var_type for param in function_node.params]
+        )
+
+    if "main" not in function_table:
+        raise NameError("El programa debe tener una función main")
+
+    # SEGUNDA PASADA:
+    # Generar el cuerpo de cada función.
+    for function_node in tree.functions:
+        llvm_func, return_type, param_types = function_table[function_node.name]
+
+        block = llvm_func.append_basic_block(name="entry")
+        builder = ir.IRBuilder(block)
+
+        irgen = IRGenerator(
+            builder,
+            intType,
+            floatType,
+            stringType,
+            boolType,
+            charType,
+            module,
+            function_node.return_type,
+            function_table
+        )
+
+        function_node.accept(irgen)
+
+        if not builder.block.is_terminated:
+            if function_node.return_type == "void":
+                builder.ret_void()
+            else:
+                raise TypeError(
+                    f"La función '{function_node.name}' no tiene return en todos los caminos"
+                )
+
+    return module
+
+module = compile_source(data)
 print(module)
+
 # %%
+"""
+================================================================ 
+                        A N A L I Z E R
+================================================================
+"""
+
+from pathlib import Path
+
+try:
+    BASE_DIR = Path(__file__).resolve().parent
+except NameError:
+    BASE_DIR = Path.cwd()
+
+EXAMPLES_DIR = BASE_DIR / "Examples"
+
+parser = yacc.yacc()
+
+parser = yacc.yacc()
+
+for example_path in sorted(EXAMPLES_DIR.glob("*.c")):
+    print("\n==============================")
+    print(f"Parsing: {example_path.name}")
+    print("==============================")
+
+    data = example_path.read_text(encoding="utf-8")
+
+    module = compile_source(data)
+
+    print(module)
+
+#%%
