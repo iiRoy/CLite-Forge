@@ -1,16 +1,29 @@
-//Aproxima e^x usando la serie e^x = 1 + x + x^2/2! + x^3/3! + [...]
+// https://www-geeksforgeeks-org.translate.goog/dsa/program-to-calculate-ex-by-recursion/?_x_tr_sl=en&_x_tr_tl=es&_x_tr_hl=es&_x_tr_pto=tc&_x_tr_hist=true
+// Modified with ChatGPT
 
-double taylor() {
-    double x = 1;
-    double result = 1;
-    double term = 1;
-    int n = 5;
+#include <stdio.h>
+
+float e(int x, int n)
+{
+    float result = 1;
+    float term = 1;
     int i = 1;
 
-    for (i = 1; i <= n; i = i + 1) {
+    while (i <= n) {
         term = term * x / i;
         result = result + term;
+        i = i + 1;
     }
 
     return result;
+}
+
+int main()
+{
+    int x = 4;
+    int n = 15;
+
+    printf("%lf \n", e(x, n));
+
+    return 0;
 }
